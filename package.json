@@ -1,0 +1,139 @@
+{
+  "name": "jest-test-selector",
+  "displayName": "Jest Test Selector",
+  "description": "モノレポ構造に対応したJestテストケース選択実行ツール",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ren-mntn/jest-test-selector.git"
+  },
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Testing"
+  ],
+  "activationEvents": [
+    "onCommand:jestTestSelector.runTest",
+    "onView:jestTestSelector.testExplorer",
+    "onView:jestTestSelector.testResults"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jestTestSelector.runTest",
+        "title": "Jest: テストケースを選択して実行"
+      },
+      {
+        "command": "jestTestSelector.refreshTests",
+        "title": "テスト一覧を更新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "jestTestSelector.runSelectedTest",
+        "title": "テストを実行",
+        "icon": "$(play)"
+      },
+      {
+        "command": "jestTestSelector.runAllTests",
+        "title": "すべてのテストを実行",
+        "icon": "$(play-all)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jest-test-selector",
+          "title": "Jest Test Selector",
+          "icon": "$(beaker)"
+        }
+      ]
+    },
+    "views": {
+      "jest-test-selector": [
+        {
+          "id": "jestTestSelector.testExplorer",
+          "name": "テストエクスプローラー"
+        },
+        {
+          "id": "jestTestSelector.testResults",
+          "name": "テスト結果",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "jestTestSelector.refreshTests",
+          "when": "view == jestTestSelector.testExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "jestTestSelector.runAllTests",
+          "when": "view == jestTestSelector.testExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "jestTestSelector.runSelectedTest",
+          "when": "view == jestTestSelector.testExplorer && viewItem == testCase",
+          "group": "inline"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "jestTestSelector.runTest",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      }
+    ],
+    "configuration": {
+      "title": "Jest Test Selector",
+      "properties": {
+        "jestTestSelector.packageManager": {
+          "type": "string",
+          "default": "pnpm",
+          "enum": [
+            "pnpm",
+            "npm",
+            "yarn"
+          ],
+          "description": "使用するパッケージマネージャ"
+        },
+        "jestTestSelector.testCommand": {
+          "type": "string",
+          "default": "test",
+          "description": "テスト実行コマンド"
+        },
+        "jestTestSelector.monorepoPattern": {
+          "type": "string",
+          "default": "apps/*",
+          "description": "モノレポのパッケージパターン (例: apps/*)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/glob": "^7.1.3",
+    "@types/node": "^16.18.34",
+    "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.44.0",
+    "minimatch": "^3.0.4",
+    "typescript": "^5.1.6",
+    "vsce": "^2.15.0"
+  }
+}

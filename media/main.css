@@ -1,0 +1,103 @@
+/* Jest Test Selector スタイル */
+
+/* 全体のスタイル */
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+  padding: 10px;
+  line-height: 1.5;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+}
+
+/* ローディング関連 */
+.running {
+  text-align: center;
+  padding: 20px;
+}
+
+.test-name {
+  font-weight: bold;
+}
+
+.spinner {
+  margin: 20px auto;
+  width: 50px;
+  height: 50px;
+  border: 5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  border-top-color: var(--vscode-button-background);
+  animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ANSIカラー */
+.ansi-red {
+  color: #f44747;
+}
+.ansi-green {
+  color: #6a9955;
+}
+.ansi-yellow {
+  color: #d7ba7d;
+}
+.ansi-blue {
+  color: #569cd6;
+}
+.ansi-magenta {
+  color: #c586c0;
+}
+.ansi-cyan {
+  color: #4ec9b0;
+}
+.ansi-white {
+  color: #e0e0e0;
+}
+.ansi-bold {
+  font-weight: bold;
+}
+
+/* テスト結果ステータス */
+.test-pass {
+  color: #6a9955;
+  font-weight: bold;
+}
+
+.test-fail {
+  color: #f44747;
+  font-weight: bold;
+}
+
+.test-skip {
+  color: #d7ba7d;
+  font-weight: bold;
+}
+
+/* エラーメッセージ */
+.error-message {
+  background-color: rgba(244, 71, 71, 0.1);
+  border-left: 3px solid #f44747;
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+/* コードスニペット */
+.code-snippet {
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
