@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TestTreeDataProvider = exports.TestTreeItem = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
+const debugger_1 = require("./debugger");
 const testExtractor_1 = require("./testExtractor");
 /**
  * TreeViewアイテムのクラス
@@ -71,7 +72,8 @@ class TestTreeItem extends vscode.TreeItem {
                 };
                 break;
             case "testCase":
-                this.iconPath = new vscode.ThemeIcon("symbol-method");
+                // テストケースの場合は、テスト結果に基づいてアイコンを設定
+                this.setTestCaseIcon();
                 this.tooltip = testCase
                     ? `テスト: ${testCase.name} (行: ${testCase.lineNumber})`
                     : label;
@@ -146,6 +148,52 @@ class TestTreeItem extends vscode.TreeItem {
             }
         }
     }
+    /**
+     * テストケースのアイコンをテスト結果に基づいて設定
+     */
+    setTestCaseIcon() {
+        if (!this.testCase) {
+            this.iconPath = new vscode.ThemeIcon("symbol-method");
+            return;
+        }
+        // テスト結果を取得
+        const testResult = debugger_1.JestDebugger.getTestResult(this.filePath, this.testCase.name);
+        if (!testResult) {
+            // テスト結果がない場合はデフォルトのアイコン
+            this.iconPath = new vscode.ThemeIcon("symbol-method");
+            return;
+        }
+        // テスト結果に基づいてアイコンを設定
+        switch (testResult.status) {
+            case debugger_1.TestResultStatus.Success:
+                // 成功の場合は緑色のチェックマーク
+                this.iconPath = new vscode.ThemeIcon("check", new vscode.ThemeColor("testing.iconPassed"));
+                this.tooltip = `${this.tooltip} [成功]`;
+                break;
+            case debugger_1.TestResultStatus.Failure:
+                // 失敗の場合は赤色のバツ印
+                this.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("testing.iconFailed"));
+                this.tooltip = `${this.tooltip} [失敗]`;
+                if (testResult.message) {
+                    this.tooltip += `\n${testResult.message}`;
+                }
+                break;
+            case debugger_1.TestResultStatus.Running:
+                // 実行中の場合は青色の再生アイコン
+                this.iconPath = new vscode.ThemeIcon("play", new vscode.ThemeColor("testing.iconQueued"));
+                this.tooltip = `${this.tooltip} [実行中]`;
+                break;
+            case debugger_1.TestResultStatus.Pending:
+                // 保留中の場合は黄色のクロックアイコン
+                this.iconPath = new vscode.ThemeIcon("history", new vscode.ThemeColor("testing.iconSkipped"));
+                this.tooltip = `${this.tooltip} [保留中]`;
+                break;
+            default:
+                // その他の場合はデフォルトのアイコン
+                this.iconPath = new vscode.ThemeIcon("symbol-method");
+                break;
+        }
+    }
 }
 exports.TestTreeItem = TestTreeItem;
 /**
@@ -159,12 +207,32 @@ class TestTreeDataProvider {
         this.rootNodes = [];
         // パッケージディレクトリのキャッシュ
         this.packageDirectoriesCache = {};
+        // イベントリスナーのディスポーザブル
+        this.disposables = [];
         // アクティブエディタの変更を監視
-        vscode.window.onDidChangeActiveTextEditor((editor) => {
+        this.disposables.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (editor && this.isTestFile(editor.document.uri.fsPath)) {
                 this.refresh();
             }
-        });
+        }));
+        // テスト出力イベントを監視
+        this.disposables.push((0, debugger_1.onTestOutput)(() => {
+            // テスト出力が更新されたらツリービューを更新
+            this._onDidChangeTreeData.fire();
+        }));
+        // テストセッション終了イベントを監視
+        this.disposables.push((0, debugger_1.onTestSessionEnd)(() => {
+            // テストセッションが終了したらツリービューを更新
+            this._onDidChangeTreeData.fire();
+        }));
+    }
+    /**
+     * リソースの破棄
+     */
+    dispose() {
+        // 全てのイベントリスナーを解放
+        this.disposables.forEach((d) => d.dispose());
+        this.disposables = [];
     }
     /**
      * ルートレベルのノードを構築
@@ -328,38 +396,46 @@ class TestTreeDataProvider {
      */
     async refresh() {
         try {
+            console.log("テストツリーデータの更新を開始");
             // ルートノードを初期化
             this.rootNodes = this.buildRootNodes();
             // 現在アクティブなエディタを取得
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
                 // エディタが開かれていない場合は空のツリーを表示
+                console.log("アクティブなエディタがありません、空のツリーを表示します");
                 this._onDidChangeTreeData.fire();
                 return;
             }
             const filePath = editor.document.uri.fsPath;
             this.lastActiveFilePath = filePath;
+            console.log(`アクティブファイル: ${filePath}`);
             const currentDirPath = path.dirname(filePath);
             // Jest設定ファイルのあるパッケージディレクトリを検索
             const packageInfo = await this.findPackageDirectoryWithJestConfig(filePath);
+            console.log(`検出されたパッケージ: ${packageInfo ? packageInfo.name : "なし"}`);
             // ディレクトリ内のすべてのテストファイルを検索
             const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
+            console.log(`ディレクトリ内のテストファイル数: ${testFiles.length}`);
             if (testFiles.length > 0) {
                 // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
                 // 現在のディレクトリが前回と同じ場合は不要な更新をスキップ
                 if (this.lastActiveFilePath === currentDirPath &&
                     this.rootNodes.length > 1 &&
                     this.rootNodes[1].name === `${path.basename(currentDirPath)}`) {
+                    console.log("ディレクトリが前回と同じため更新をスキップします");
                     return;
                 }
                 // ディレクトリパスを保存（区別のため）
                 this.lastActiveFilePath = currentDirPath;
                 // ディレクトリベースのツリーを構築
+                console.log(`ディレクトリベースのツリーを構築: ${currentDirPath}`);
                 await this.buildDirectoryTestTree(currentDirPath, testFiles);
                 // パッケージ情報が見つかった場合、パッケージノードを追加
                 if (packageInfo) {
                     this.addPackageTestNode(packageInfo);
                 }
+                console.log("ツリービューを更新します");
                 this._onDidChangeTreeData.fire();
                 return;
             }
@@ -368,13 +444,16 @@ class TestTreeDataProvider {
             if (this.isTestFile(filePath)) {
                 // 現在のファイルがテストファイルの場合はそのまま使用
                 testFilePath = filePath;
+                console.log(`現在のファイルはテストファイルです: ${testFilePath}`);
             }
             else {
                 // 実装ファイルの場合は対応するテストファイルを探す
                 testFilePath = await this.findCorrespondingTestFile(filePath);
+                console.log(`対応するテストファイル: ${testFilePath || "見つかりません"}`);
             }
             // テストファイルが見つからない場合は何もしない
             if (!testFilePath) {
+                console.log("テストファイルが見つからないため更新を中止します");
                 return;
             }
             // 現在のファイルが前回と同じ場合は不要な更新をスキップ
@@ -382,13 +461,16 @@ class TestTreeDataProvider {
                 this.rootNodes.length > 0 &&
                 this.rootNodes[0].type === "file" &&
                 this.rootNodes[0].name === path.basename(testFilePath)) {
+                console.log("ファイルが前回と同じため更新をスキップします");
                 return;
             }
             // テストファイルのパスを保存
             this.lastActiveFilePath = testFilePath;
             // ツリーデータをリフレッシュ
+            console.log(`テストファイルからツリーを構築: ${testFilePath}`);
             this.rootNodes = [];
             await this.buildTestTree(this.lastActiveFilePath);
+            console.log("ツリービューを更新します");
             this._onDidChangeTreeData.fire();
         }
         catch (error) {

@@ -227,12 +227,6 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
         value: !!currentOptions["--expand"],
       },
       {
-        id: "--json",
-        label: "JSON出力",
-        description: "結果をJSON形式で出力します",
-        value: !!currentOptions["--json"],
-      },
-      {
         id: "--useStderr",
         label: "標準エラー出力に出力",
         description: "全ての出力を標準エラー出力に出力します",
@@ -243,7 +237,7 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
         label: "キャッシュを使用しない",
         description:
           "注意: キャッシュの無効化はキャッシュに関連した問題が発生した場合のみ行って下さい。 概して、キャッシュの無効化によりJestの実行時間は2倍になります。",
-        value: currentOptions["--no-cache"] !== false, // デフォルトでtrue
+        value: !!currentOptions["--no-cache"],
       },
       {
         id: "--debug",
@@ -379,9 +373,6 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
   <link href="${styleUri}?v=${timestamp}" rel="stylesheet">
 </head>
 <body>
-  <div class="header">
-    <h3>Jest CLIオプション</h3>
-  </div>
   <div class="options-container">
     ${optionsHtml}
   </div>

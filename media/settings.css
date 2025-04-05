@@ -3,7 +3,6 @@ body {
   font-family: var(--vscode-font-family);
   color: var(--vscode-foreground);
   padding: 8px;
-  background-color: var(--vscode-editor-background);
   font-size: 0.9em;
   height: 100vh;
   margin: 0;

@@ -11,6 +11,10 @@ export function activate(context: vscode.ExtensionContext) {
   console.log('拡張機能 "jest-test-selector" が有効化されました');
   console.log(`拡張機能ID: ${context.extension.id}`);
 
+  // 起動時に過去のテスト結果履歴を読み込む
+  JestDebugger.loadHistoryFile();
+  console.log("テスト結果履歴の読み込みが完了しました");
+
   // カバレッジステータス表示用のステータスバーアイテム
   const coverageStatusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -68,20 +72,15 @@ export function activate(context: vscode.ExtensionContext) {
 
     // テストツリービューデータプロバイダーを作成
     const testTreeDataProvider = new TestTreeDataProvider();
-    let testTreeView: vscode.TreeView<TestTreeItem> | undefined;
-
-    try {
-      testTreeView = vscode.window.createTreeView(
-        "jestTestSelector.testExplorer",
-        {
-          treeDataProvider: testTreeDataProvider,
-          showCollapseAll: true,
-        }
-      );
-      console.log("テストエクスプローラービューを登録しました");
-    } catch (e) {
-      console.log("テストエクスプローラービューは既に登録されています");
-    }
+    const testTreeView = vscode.window.createTreeView(
+      "jestTestSelector.testExplorer",
+      {
+        treeDataProvider: testTreeDataProvider,
+        showCollapseAll: true,
+      }
+    );
+    context.subscriptions.push(testTreeView);
+    context.subscriptions.push(testTreeDataProvider);
 
     // Jest CLI オプションタブを開くコマンドを登録
     const selectJestOptionsDisposable = vscode.commands.registerCommand(
@@ -271,6 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
         // 適切なデバッグコマンドを実行
         let success = false;
 
+        // パッケージのテスト
         if (scope === "package") {
           // パッケージ全体のテストを実行するケース
           if (runBoth) {
@@ -286,7 +286,8 @@ export function activate(context: vscode.ExtensionContext) {
             testCmd = await JestDebugger.prepareDirectoryTestCommand(
               path.join(targetPackage.path, "src"),
               targetPackage,
-              false
+              false,
+              true
             );
 
             // 実行
@@ -309,7 +310,8 @@ export function activate(context: vscode.ExtensionContext) {
             testCmd = await JestDebugger.prepareDirectoryTestCommand(
               path.join(targetPackage.path, "src"),
               targetPackage,
-              false
+              false,
+              true
             );
 
             // 実行
@@ -332,6 +334,7 @@ export function activate(context: vscode.ExtensionContext) {
             testCmd = await JestDebugger.prepareDirectoryTestCommand(
               path.join(targetPackage.path, "src"),
               targetPackage,
+              true,
               true
             );
 
@@ -343,28 +346,6 @@ export function activate(context: vscode.ExtensionContext) {
               `E2Eテスト: ${targetPackage.name}`
             );
           } else {
-            // デフォルト挙動（ユニットテスト）
-            vscode.window.showInformationMessage(
-              `パッケージ ${targetPackage.name} のテストを実行します`
-            );
-
-            // カスタムコマンドを構築
-            let testCmd: string;
-
-            // デフォルトテストのコマンド
-            testCmd = await JestDebugger.prepareDirectoryTestCommand(
-              path.join(targetPackage.path, "src"),
-              targetPackage,
-              false
-            );
-
-            // 実行
-            success = await JestDebugger.startDebuggingWithCustomCommand(
-              targetPackage.path,
-              targetPackage,
-              testCmd,
-              `テスト: ${targetPackage.name}`
-            );
           }
         } else if (scope === "directory") {
           // ディレクトリに対するテスト実行
@@ -377,7 +358,7 @@ export function activate(context: vscode.ExtensionContext) {
             success = await JestDebugger.startDebuggingDirectoryTests(
               targetPath,
               targetPackage,
-              true
+              "e2e"
             );
           } else if (unitTestOnly) {
             vscode.window.showInformationMessage(
@@ -388,7 +369,7 @@ export function activate(context: vscode.ExtensionContext) {
             success = await JestDebugger.startDebuggingDirectoryTests(
               targetPath,
               targetPackage,
-              false
+              "unit"
             );
           } else {
             vscode.window.showInformationMessage(
@@ -396,7 +377,8 @@ export function activate(context: vscode.ExtensionContext) {
             );
             success = await JestDebugger.startDebuggingDirectoryTests(
               targetPath,
-              targetPackage
+              targetPackage,
+              "all"
             );
           }
         } else if (scope === "file") {
@@ -459,7 +441,13 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        await runTestsAtScope("directory", item.filePath);
+        await runTestsAtScope(
+          "directory",
+          item.filePath,
+          undefined,
+          false,
+          false
+        );
       }
     );
     disposables.push(runDirectoryAllTestsDisposable);
@@ -497,6 +485,55 @@ export function activate(context: vscode.ExtensionContext) {
       }
     );
     disposables.push(runDirectoryE2ETestsDisposable);
+
+    // パッケージのユニットテストを実行するコマンド
+    const runPackageUnitTestsDisposable = vscode.commands.registerCommand(
+      "jestTestSelector.runPackageUnitTests",
+      async (item: TestTreeItem) => {
+        if (!item || !item.filePath) {
+          vscode.window.showErrorMessage("パッケージパスが取得できません");
+          return;
+        }
+
+        await runTestsAtScope("package", item.filePath, undefined, true, false);
+      }
+    );
+    disposables.push(runPackageUnitTestsDisposable);
+
+    // パッケージのE2Eテストを実行するコマンド
+    const runPackageE2ETestsDisposable = vscode.commands.registerCommand(
+      "jestTestSelector.runPackageE2ETests",
+      async (item: TestTreeItem) => {
+        if (!item || !item.filePath) {
+          vscode.window.showErrorMessage("パッケージパスが取得できません");
+          return;
+        }
+
+        await runTestsAtScope("package", item.filePath, undefined, false, true);
+      }
+    );
+    disposables.push(runPackageE2ETestsDisposable);
+
+    // パッケージの全てのテストを実行するコマンド
+    const runPackageAllTestsDisposable = vscode.commands.registerCommand(
+      "jestTestSelector.runPackageAllTests",
+      async (item: TestTreeItem) => {
+        if (!item || !item.filePath) {
+          vscode.window.showErrorMessage("パッケージパスが取得できません");
+          return;
+        }
+
+        await runTestsAtScope(
+          "package",
+          item.filePath,
+          undefined,
+          false,
+          false,
+          true
+        );
+      }
+    );
+    disposables.push(runPackageAllTestsDisposable);
 
     // ファイル内のすべてのテストを実行するコマンド
     const runFileAllTestsDisposable = vscode.commands.registerCommand(
