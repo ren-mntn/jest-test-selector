@@ -1,4 +1,3 @@
-import * as path from "path";
 import * as vscode from "vscode";
 
 /**
@@ -53,9 +52,6 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
     // HTMLコンテンツを設定
     webviewView.webview.html = this.getWebviewContent(nonce);
 
-    // CSS ファイルの変更を監視
-    this.watchCssChanges();
-
     // メッセージ受信ハンドラを設定
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
@@ -100,41 +96,6 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
     });
 
     console.log("テスト設定WebViewの初期化が完了しました");
-  }
-
-  /**
-   * CSS ファイルの変更を監視する
-   */
-  private watchCssChanges() {
-    // 既存のウォッチャーをクリーンアップ
-    this.disposeFileWatcher();
-
-    // settings.css のパス
-    const cssPath = path.join(
-      this._extensionUri.fsPath,
-      "media",
-      "settings.css"
-    );
-    console.log(`Watching CSS file: ${cssPath}`);
-
-    // ファイルウォッチャーを作成
-    this._fileWatcher = vscode.workspace.createFileSystemWatcher(cssPath);
-
-    // 変更イベントを監視
-    this._fileWatcher.onDidChange(() => {
-      console.log("CSS file changed, updating view...");
-
-      // 少し遅延を入れてファイルの書き込みが完了するのを待つ
-      setTimeout(() => {
-        if (this._view) {
-          // WebViewを更新
-          this.updateView();
-
-          // 変更通知
-          vscode.window.showInformationMessage("CSSが更新されました");
-        }
-      }, 100);
-    });
   }
 
   /**

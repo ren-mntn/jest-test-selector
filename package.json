@@ -25,7 +25,6 @@
     "onCommand:jestTestSelector.runSelectedTest",
     "onCommand:jestTestSelector.runPackageAllTests",
     "onView:jestTestSelector.testExplorer",
-    "onView:jestTestSelector.testResults",
     "onView:jestTestSelector.testSettings"
   ],
   "main": "./out/extension.js",
@@ -71,6 +70,11 @@
         "title": "Jest: テストケースを選択して実行"
       },
       {
+        "command": "jestTestSelector.runFileAllTests",
+        "title": "ファイルの全てのテストを実行",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "jestTestSelector.refreshTests",
         "title": "テスト一覧を更新",
         "icon": "$(refresh)"
@@ -84,6 +88,11 @@
         "command": "jestTestSelector.openSettings",
         "title": "Jest: CLIオプション設定を開く",
         "icon": "$(gear)"
+      },
+      {
+        "command": "jestTestSelector.toggleCoverage",
+        "title": "カバレッジ出力を切り替え",
+        "icon": "$(shield)"
       }
     ],
     "viewsContainers": {
@@ -101,12 +110,6 @@
           "id": "jestTestSelector.testExplorer",
           "name": "テストエクスプローラー",
           "when": "!config.jestTestSelector.hideTestExplorer"
-        },
-        {
-          "id": "jestTestSelector.testResults",
-          "name": "テスト結果",
-          "type": "webview",
-          "when": "!config.jestTestSelector.hideTestResults"
         },
         {
           "id": "jestTestSelector.testSettings",
@@ -132,6 +135,12 @@
           "command": "jestTestSelector.openSettings",
           "when": "view == jestTestSelector.testExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "jestTestSelector.toggleCoverage",
+          "when": "view == jestTestSelector.testExplorer",
+          "group": "navigation",
+          "icon": "$(shield)"
         }
       ],
       "view/item/context": [

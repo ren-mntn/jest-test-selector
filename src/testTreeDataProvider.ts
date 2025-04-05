@@ -333,7 +333,7 @@ export class TestTreeDataProvider
       // };
       // directoryNode.children.push(allDirTestsNode);
 
-      // 「ユニットテストのみ実行」ノードを追加
+      // // 「ユニットテストのみ実行」ノードを追加
       // const unitTestsNode: TestNode = {
       //   name: "ユニットテストを実行",
       //   type: "directoryUnitTests",
@@ -810,6 +810,17 @@ export class TestTreeDataProvider
     path: string;
     name: string;
   }): void {
+    // 同じ名前のパッケージノードが既に存在するかチェック
+    const existingPackageNode = this.rootNodes.find(
+      (node) =>
+        node.type === "packageAllTests" && node.name === packageInfo.name
+    );
+
+    // 既存のノードがある場合は追加しない
+    if (existingPackageNode) {
+      return;
+    }
+
     // ルートノードに「パッケージのすべてのテストを実行」ノードを追加
     const packageNode: TestNode = {
       name: `${packageInfo.name}`,

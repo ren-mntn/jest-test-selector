@@ -4,7 +4,7 @@ node_modules
 previewConfig.json
 
 # Compiled output
-out/
+out
 dist/
 
 # VS Code extension packaging

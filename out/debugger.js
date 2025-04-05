@@ -33,38 +33,20 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.JestDebugger = exports.onTestSessionEnd = exports.testSessionEndEventEmitter = exports.onTestOutput = exports.testOutputEventEmitter = void 0;
+exports.JestDebugger = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
-// イベントエミッター
-exports.testOutputEventEmitter = new vscode.EventEmitter();
-exports.onTestOutput = exports.testOutputEventEmitter.event;
-exports.testSessionEndEventEmitter = new vscode.EventEmitter();
-exports.onTestSessionEnd = exports.testSessionEndEventEmitter.event;
 /**
  * デバッグセッションの設定と実行を管理するクラス
  */
 class JestDebugger {
-    /**
-     * テスト出力をクリア
-     */
-    static clearOutput() {
-        this.testOutputContent = "";
-    }
-    /**
-     * テスト出力を追加
-     */
-    static appendOutput(output) {
-        this.testOutputContent += output;
-        exports.testOutputEventEmitter.fire(this.testOutputContent);
-    }
     /**
      * デバッグセッションを開始する共通処理
      */
     static async startDebuggingCommon(workspaceFolder, debugConfig) {
         // ターミナル出力をキャプチャするためのセットアップ
         this.setupTerminalOutputCapture();
-        // デバッグセッションを開始（非同期で出力をモニタリング）
+        // デバッグセッションを開始
         this.monitorDebugOutput();
         // 最終的な実行コマンドを表示
         const cmd = debugConfig.runtimeExecutable;
@@ -85,7 +67,6 @@ class JestDebugger {
      */
     static async startDebugging(testFilePath, testCase, packageInfo) {
         try {
-            this.clearOutput();
             console.log(`Starting debugging with file path: ${testFilePath}, package path: ${packageInfo.path}`);
             // 絶対パスを構築
             const absoluteFilePath = path.isAbsolute(testFilePath)
@@ -184,7 +165,6 @@ class JestDebugger {
      */
     static async startDebuggingAllTests(testFilePath, packageInfo) {
         try {
-            this.clearOutput();
             console.log(`Starting debugging all tests with file path: ${testFilePath}, package path: ${packageInfo.path}`);
             // 絶対パスを構築
             const absoluteFilePath = path.isAbsolute(testFilePath)
@@ -269,7 +249,6 @@ class JestDebugger {
      */
     static async startDebuggingDirectoryTests(directoryPath, packageInfo, isE2EOnly) {
         try {
-            this.clearOutput();
             console.log(`Starting debugging all tests in directory: ${directoryPath}, package path: ${packageInfo.path}, E2E only: ${isE2EOnly}`);
             // 絶対パスを構築
             const absoluteDirPath = path.isAbsolute(directoryPath)
@@ -383,7 +362,6 @@ class JestDebugger {
             if (this.isDebugSessionActive) {
                 console.log("Debug session timeout reached, forcing session end");
                 this.isDebugSessionActive = false;
-                exports.testSessionEndEventEmitter.fire();
                 // リソース解放
                 if (this.debugSessionDisposable) {
                     this.debugSessionDisposable.dispose();
@@ -391,24 +369,6 @@ class JestDebugger {
                 }
             }
         }, 30000);
-        // VSCodeのデバッグコンソールからの出力をキャプチャ
-        const outputDisposable = vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
-            if (event.event === "output" && event.body) {
-                const outputEvent = event.body;
-                if (outputEvent.category === "stdout" ||
-                    outputEvent.category === "stderr") {
-                    // 無限ループを防ぐため、ログ出力は最小限に抑える
-                    this.appendOutput(outputEvent.output);
-                }
-            }
-        });
-        // デバッグセッション開始時に出力をキャプチャするための準備
-        if (this.debugTerminal) {
-            console.log("Debug terminal is ready for output capture");
-            // バックグラウンドでデバッグセッションの実行を監視
-            // 注：VSCodeのAPIにはターミナル出力を直接キャプチャする方法がないため、
-            // デバッグイベントに依存して出力を取得します
-        }
         // デバッグセッション終了時の処理
         const debugSessionTerminateDisposable = vscode.debug.onDidTerminateDebugSession((session) => {
             // Jestのデバッグセッションかどうかをチェック
@@ -423,19 +383,7 @@ class JestDebugger {
                     }
                     this.isDebugSessionActive = false;
                     console.log("Debug session ended:", session.name);
-                    // テスト実行が完了したことをユーザーに通知
-                    // 出力がない場合は終了メッセージを追加
-                    if (this.testOutputContent.trim() === "") {
-                        this.appendOutput("\nテストの実行が完了しましたが、出力が取得できませんでした。\n");
-                        this.appendOutput("詳細な結果はターミナルを確認してください。\n");
-                    }
-                    else {
-                        this.appendOutput("\nテスト実行が完了しました。\n");
-                    }
-                    // セッション終了イベントを発火
-                    exports.testSessionEndEventEmitter.fire();
                     // リソース解放
-                    outputDisposable.dispose();
                     debugSessionTerminateDisposable.dispose();
                     if (this.debugSessionDisposable) {
                         this.debugSessionDisposable.dispose();
@@ -451,7 +399,6 @@ class JestDebugger {
         // リソース解放用のディスポーザブルを設定
         this.debugSessionDisposable = {
             dispose: () => {
-                outputDisposable.dispose();
                 debugSessionTerminateDisposable.dispose();
             },
         };
@@ -511,7 +458,6 @@ class JestDebugger {
      */
     static async startDebuggingWithCustomCommand(directoryPath, packageInfo, customCommand, displayName) {
         try {
-            this.clearOutput();
             console.log(`Starting debugging with custom command for: ${directoryPath}, command: ${customCommand}`);
             // 絶対パスを構築
             const absoluteDirPath = path.isAbsolute(directoryPath)
@@ -605,6 +551,5 @@ class JestDebugger {
     }
 }
 exports.JestDebugger = JestDebugger;
-JestDebugger.testOutputContent = "";
 JestDebugger.isDebugSessionActive = false;
 //# sourceMappingURL=debugger.js.map

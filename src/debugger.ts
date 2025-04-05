@@ -3,36 +3,14 @@ import * as vscode from "vscode";
 import { PackageInfo } from "./monorepoDetector";
 import { TestCase } from "./testExtractor";
 
-// イベントエミッター
-export const testOutputEventEmitter = new vscode.EventEmitter<string>();
-export const onTestOutput = testOutputEventEmitter.event;
-export const testSessionEndEventEmitter = new vscode.EventEmitter<void>();
-export const onTestSessionEnd = testSessionEndEventEmitter.event;
-
 /**
  * デバッグセッションの設定と実行を管理するクラス
  */
 export class JestDebugger {
-  private static testOutputContent: string = "";
   private static isDebugSessionActive: boolean = false;
   private static debugSessionDisposable: vscode.Disposable | undefined;
   private static debugSessionTimeout: NodeJS.Timeout | undefined;
   private static debugTerminal: vscode.Terminal | undefined;
-
-  /**
-   * テスト出力をクリア
-   */
-  public static clearOutput(): void {
-    this.testOutputContent = "";
-  }
-
-  /**
-   * テスト出力を追加
-   */
-  public static appendOutput(output: string): void {
-    this.testOutputContent += output;
-    testOutputEventEmitter.fire(this.testOutputContent);
-  }
 
   /**
    * デバッグセッションを開始する共通処理
@@ -44,7 +22,7 @@ export class JestDebugger {
     // ターミナル出力をキャプチャするためのセットアップ
     this.setupTerminalOutputCapture();
 
-    // デバッグセッションを開始（非同期で出力をモニタリング）
+    // デバッグセッションを開始
     this.monitorDebugOutput();
 
     // 最終的な実行コマンドを表示
@@ -73,7 +51,6 @@ export class JestDebugger {
     packageInfo: PackageInfo
   ): Promise<boolean> {
     try {
-      this.clearOutput();
       console.log(
         `Starting debugging with file path: ${testFilePath}, package path: ${packageInfo.path}`
       );
@@ -203,7 +180,6 @@ export class JestDebugger {
     packageInfo: PackageInfo
   ): Promise<boolean> {
     try {
-      this.clearOutput();
       console.log(
         `Starting debugging all tests with file path: ${testFilePath}, package path: ${packageInfo.path}`
       );
@@ -318,7 +294,6 @@ export class JestDebugger {
     isE2EOnly?: boolean
   ): Promise<boolean> {
     try {
-      this.clearOutput();
       console.log(
         `Starting debugging all tests in directory: ${directoryPath}, package path: ${packageInfo.path}, E2E only: ${isE2EOnly}`
       );
@@ -464,7 +439,6 @@ export class JestDebugger {
       if (this.isDebugSessionActive) {
         console.log("Debug session timeout reached, forcing session end");
         this.isDebugSessionActive = false;
-        testSessionEndEventEmitter.fire();
 
         // リソース解放
         if (this.debugSessionDisposable) {
@@ -473,30 +447,6 @@ export class JestDebugger {
         }
       }
     }, 30000);
-
-    // VSCodeのデバッグコンソールからの出力をキャプチャ
-    const outputDisposable = vscode.debug.onDidReceiveDebugSessionCustomEvent(
-      (event) => {
-        if (event.event === "output" && event.body) {
-          const outputEvent = event.body;
-          if (
-            outputEvent.category === "stdout" ||
-            outputEvent.category === "stderr"
-          ) {
-            // 無限ループを防ぐため、ログ出力は最小限に抑える
-            this.appendOutput(outputEvent.output);
-          }
-        }
-      }
-    );
-
-    // デバッグセッション開始時に出力をキャプチャするための準備
-    if (this.debugTerminal) {
-      console.log("Debug terminal is ready for output capture");
-      // バックグラウンドでデバッグセッションの実行を監視
-      // 注：VSCodeのAPIにはターミナル出力を直接キャプチャする方法がないため、
-      // デバッグイベントに依存して出力を取得します
-    }
 
     // デバッグセッション終了時の処理
     const debugSessionTerminateDisposable =
@@ -517,22 +467,7 @@ export class JestDebugger {
             this.isDebugSessionActive = false;
             console.log("Debug session ended:", session.name);
 
-            // テスト実行が完了したことをユーザーに通知
-            // 出力がない場合は終了メッセージを追加
-            if (this.testOutputContent.trim() === "") {
-              this.appendOutput(
-                "\nテストの実行が完了しましたが、出力が取得できませんでした。\n"
-              );
-              this.appendOutput("詳細な結果はターミナルを確認してください。\n");
-            } else {
-              this.appendOutput("\nテスト実行が完了しました。\n");
-            }
-
-            // セッション終了イベントを発火
-            testSessionEndEventEmitter.fire();
-
             // リソース解放
-            outputDisposable.dispose();
             debugSessionTerminateDisposable.dispose();
             if (this.debugSessionDisposable) {
               this.debugSessionDisposable.dispose();
@@ -550,7 +485,6 @@ export class JestDebugger {
     // リソース解放用のディスポーザブルを設定
     this.debugSessionDisposable = {
       dispose: () => {
-        outputDisposable.dispose();
         debugSessionTerminateDisposable.dispose();
       },
     };
@@ -624,7 +558,6 @@ export class JestDebugger {
     displayName: string
   ): Promise<boolean> {
     try {
-      this.clearOutput();
       console.log(
         `Starting debugging with custom command for: ${directoryPath}, command: ${customCommand}`
       );
