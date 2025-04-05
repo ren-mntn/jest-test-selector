@@ -9,11 +9,6 @@ export type TestItemType =
   | "file" // 通常のファイル
   | "describe" // describeブロック
   | "testCase" // 個別のテストケース
-  | "globalAllTests" // ワークスペース全体のテスト実行
-  | "directoryAllTests" // ディレクトリ内のすべてのテスト実行
-  | "directoryUnitTests" // ディレクトリ内のすべてのユニットテスト実行
-  | "directoryE2ETests" // ディレクトリ内のすべてのE2Eテスト実行
-  | "fileAllTests" // ファイル内のすべてのテスト実行
   | "packageAllTests"; // パッケージのすべてのテスト実行
 
 /**
@@ -35,44 +30,14 @@ export class TestTreeItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon("package");
         this.contextValue = "packageAllTests";
         break;
-      case "directoryAllTests":
-        this.iconPath = new vscode.ThemeIcon("run-all");
-        this.tooltip = "このディレクトリのすべてのテストを実行";
-        this.contextValue = "directoryAllTests";
-        break;
-      case "directoryUnitTests":
-        this.iconPath = new vscode.ThemeIcon("beaker");
-        this.tooltip = "このディレクトリのすべてのユニットテストを実行";
-        this.contextValue = "directoryUnitTests";
-        break;
-      case "directoryE2ETests":
-        this.iconPath = new vscode.ThemeIcon("plug");
-        this.tooltip = "このディレクトリのすべてのE2Eテストを実行";
-        this.contextValue = "directoryE2ETests";
-        break;
-      case "fileAllTests":
-        this.iconPath = new vscode.ThemeIcon("beaker");
-        this.tooltip = "このファイルのすべてのテストを実行";
-        this.contextValue = "fileAllTests";
-        this.command = {
-          command: "vscode.open",
-          title: "ファイルを開く",
-          arguments: [vscode.Uri.file(filePath)],
-        };
-        break;
       case "file":
-        this.iconPath = new vscode.ThemeIcon("folder"); // ディレクイトリのテスト
+        this.iconPath = new vscode.ThemeIcon("folder"); // ディレクトリのテスト
         this.tooltip = `ファイル: ${path.basename(filePath)}`;
         this.description = path.relative(
           vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "",
           filePath
         );
         this.contextValue = "testFile";
-        this.command = {
-          command: "vscode.open",
-          title: "ファイルを開く",
-          arguments: [vscode.Uri.file(filePath)],
-        };
         break;
       case "describe":
         this.iconPath = new vscode.ThemeIcon("beaker");
@@ -124,10 +89,7 @@ export class TestTreeItem extends vscode.TreeItem {
 
       // 現在のアイテムが現在フォーカスしているファイルと同じファイルの項目かチェック
       if (
-        (type === "file" ||
-          type === "fileAllTests" ||
-          type === "testCase" ||
-          type === "describe") &&
+        (type === "file" || type === "testCase" || type === "describe") &&
         path.normalize(filePath) === path.normalize(activeFilePath)
       ) {
         // 背景色を少し白くするためにハイライト用のアイコンを設定
@@ -315,57 +277,6 @@ export class TestTreeDataProvider
 
       // ディレクトリノードをルートノードとして設定
       this.rootNodes = [directoryNode];
-
-      // // 「すべてのテストを実行」ノードをディレクトリノードの直下に追加
-      // const allDirTestsNode: TestNode = {
-      //   name: "すべてのテストを実行",
-      //   type: "directoryAllTests",
-      //   filePath: dirPath,
-      //   children: [],
-      //   testCase: {
-      //     name: "すべてのテストを実行",
-      //     fullName: "すべてのテストを実行",
-      //     describePath: [],
-      //     lineNumber: 0,
-      //     isAllTests: true,
-      //     isDirectoryAllTests: true,
-      //   },
-      // };
-      // directoryNode.children.push(allDirTestsNode);
-
-      // // 「ユニットテストのみ実行」ノードを追加
-      // const unitTestsNode: TestNode = {
-      //   name: "ユニットテストを実行",
-      //   type: "directoryUnitTests",
-      //   filePath: dirPath,
-      //   children: [],
-      //   testCase: {
-      //     name: "ユニットテストを実行",
-      //     fullName: "ユニットテストを実行",
-      //     describePath: [],
-      //     lineNumber: 0,
-      //     isAllTests: true,
-      //     isDirectoryAllTests: true,
-      //   },
-      // };
-      // directoryNode.children.push(unitTestsNode);
-
-      // // 「E2Eテストのみ実行」ノードを追加
-      // const e2eTestsNode: TestNode = {
-      //   name: "E2Eテストを実行",
-      //   type: "directoryE2ETests",
-      //   filePath: dirPath,
-      //   children: [],
-      //   testCase: {
-      //     name: "E2Eテストを実行",
-      //     fullName: "E2Eテストを実行",
-      //     describePath: [],
-      //     lineNumber: 0,
-      //     isAllTests: true,
-      //     isDirectoryAllTests: true,
-      //   },
-      // };
-      // directoryNode.children.push(e2eTestsNode);
 
       // すべてのテストファイルからテストケースを抽出
       for (const testFile of testFiles) {
@@ -580,7 +491,7 @@ export class TestTreeDataProvider
       // すべてのテストを実行するノード
       const allTestsNode: TestNode = {
         name: "All Tests",
-        type: "fileAllTests",
+        type: "testCase",
         filePath,
         children: [],
         testCase: {
