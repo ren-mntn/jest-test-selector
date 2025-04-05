@@ -41,7 +41,7 @@ const vscode = __importStar(require("vscode"));
 class TestResultView {
     constructor(_extensionUri) {
         this._extensionUri = _extensionUri;
-        this._lastOutput = '';
+        this._lastOutput = "";
         this._isRunning = false;
     }
     /**
@@ -59,7 +59,7 @@ class TestResultView {
     registerView(view) {
         this._view = view;
         this._view.webview.options = {
-            enableScripts: true
+            enableScripts: true,
         };
         // 最後の出力があれば表示
         if (this._lastOutput) {
@@ -76,7 +76,7 @@ class TestResultView {
         // 基本的なANSIエスケープシーケンスをHTML/CSSに変換
         const ansiToHtml = text
             // リセット
-            .replace(/\u001b\[0m/g, '</span>')
+            .replace(/\u001b\[0m/g, "</span>")
             // 赤色（エラー）
             .replace(/\u001b\[31m/g, '<span class="ansi-red">')
             // 緑色（成功）
@@ -94,7 +94,7 @@ class TestResultView {
             // 太字
             .replace(/\u001b\[1m/g, '<span class="ansi-bold">')
             // その他のエスケープシーケンスを除去
-            .replace(/\u001b\[\d+(;\d+)*m/g, '');
+            .replace(/\u001b\[\d+(;\d+)*m/g, "");
         return ansiToHtml;
     }
     /**
@@ -134,7 +134,7 @@ class TestResultView {
         // 30秒後に自動的にローディング状態を終了するタイムアウト
         this._runningTimeout = setTimeout(() => {
             if (this._isRunning) {
-                console.log('Test running state timeout reached, forcing finish');
+                console.log("Test running state timeout reached, forcing finish");
                 this.finishRunningState();
             }
         }, 30000);
@@ -160,7 +160,7 @@ class TestResultView {
             this._runningTimeout = undefined;
         }
         if (this._isRunning) {
-            console.log('Finishing running state, was running:', this._isRunning);
+            console.log("Finishing running state, was running:", this._isRunning);
             this._isRunning = false;
             // 最後の出力内容を再表示（ローディングインジケータなし）
             if (this._view) {
@@ -211,23 +211,24 @@ class TestResultView {
      */
     escapeHtml(unsafe) {
         return unsafe
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
     /**
      * WebViewのHTMLを生成
      */
     getWebviewContent(content) {
         // スタイルシートのリソースパスを取得
-        const styleMainUri = this._view?.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
+        const styleMainUri = this._view?.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "main.css"));
         return `<!DOCTYPE html>
     <html lang="ja">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._view?.webview.cspSource} 'unsafe-inline';">
       <link href="${styleMainUri}" rel="stylesheet">
       <style>
         body {
@@ -272,11 +273,21 @@ class TestResultView {
         .ansi-cyan { color: #4ec9b0; }
         .ansi-white { color: #e0e0e0; }
         .ansi-bold { font-weight: bold; }
+        
+        /* テスト結果の表示スタイル */
+        .pass { color: #6a9955; }
+        .fail { color: #f44747; }
+        .error { color: #f44747; }
+        .error-message { 
+          background-color: rgba(244, 71, 71, 0.1); 
+          padding: 10px;
+          border-radius: 4px;
+        }
       </style>
       <title>Jest テスト結果</title>
     </head>
     <body>
-      <pre>${content}</pre>
+      ${content}
     </body>
     </html>`;
     }
@@ -290,10 +301,11 @@ class TestResultProvider {
         this.extensionUri = extensionUri;
     }
     resolveWebviewView(webviewView, _context, _token) {
+        console.log("TestResultProvider.resolveWebviewView called");
         // Webviewの設定
         webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri]
+            enableScripts: false,
+            localResourceRoots: [this.extensionUri],
         };
         // ビューをTestResultViewに登録
         TestResultView.getInstance(this.extensionUri).registerView(webviewView);

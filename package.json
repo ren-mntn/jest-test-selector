@@ -3,6 +3,7 @@
   "displayName": "Jest Test Selector",
   "description": "モノレポ構造に対応したJestテストケース選択実行ツール",
   "version": "0.1.0",
+  "publisher": "custom-publisher",
   "repository": {
     "type": "git",
     "url": "https://github.com/ren-mntn/jest-test-selector.git"
@@ -16,12 +17,55 @@
   ],
   "activationEvents": [
     "onCommand:jestTestSelector.runTest",
+    "onCommand:jestTestSelector.runDirectoryTests",
+    "onCommand:jestTestSelector.runDirectoryAllTests",
+    "onCommand:jestTestSelector.runDirectoryUnitTests",
+    "onCommand:jestTestSelector.runDirectoryE2ETests",
+    "onCommand:jestTestSelector.runFileAllTests",
+    "onCommand:jestTestSelector.runSelectedTest",
+    "onCommand:jestTestSelector.runPackageAllTests",
     "onView:jestTestSelector.testExplorer",
-    "onView:jestTestSelector.testResults"
+    "onView:jestTestSelector.testResults",
+    "onView:jestTestSelector.testSettings"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "jestTestSelector.runPackageUnitTests",
+        "title": "パッケージのユニットテストを実行",
+        "icon": "$(symbol-unit)"
+      },
+      {
+        "command": "jestTestSelector.runPackageE2ETests",
+        "title": "パッケージのE2Eテストを実行",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "jestTestSelector.runPackageAllTests",
+        "title": "パッケージの全てのテストを実行",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "jestTestSelector.runDirectoryUnitTests",
+        "title": "ディレクトリのユニットテストを実行",
+        "icon": "$(symbol-unit)"
+      },
+      {
+        "command": "jestTestSelector.runDirectoryE2ETests",
+        "title": "ディレクトリのE2Eテストを実行",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "jestTestSelector.runDirectoryAllTests",
+        "title": "ディレクトリの全てのテストを実行",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "jestTestSelector.runSelectedTest",
+        "title": "テストを実行",
+        "icon": "$(play)"
+      },
       {
         "command": "jestTestSelector.runTest",
         "title": "Jest: テストケースを選択して実行"
@@ -32,14 +76,14 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "jestTestSelector.runSelectedTest",
-        "title": "テストを実行",
-        "icon": "$(play)"
+        "command": "jestTestSelector.selectOptions",
+        "title": "Jest: CLIオプションを選択",
+        "icon": "$(settings-gear)"
       },
       {
-        "command": "jestTestSelector.runAllTests",
-        "title": "すべてのテストを実行",
-        "icon": "$(play-all)"
+        "command": "jestTestSelector.openSettings",
+        "title": "Jest: CLIオプション設定を開く",
+        "icon": "$(gear)"
       }
     ],
     "viewsContainers": {
@@ -55,12 +99,20 @@
       "jest-test-selector": [
         {
           "id": "jestTestSelector.testExplorer",
-          "name": "テストエクスプローラー"
+          "name": "テストエクスプローラー",
+          "when": "!config.jestTestSelector.hideTestExplorer"
         },
         {
           "id": "jestTestSelector.testResults",
           "name": "テスト結果",
-          "type": "webview"
+          "type": "webview",
+          "when": "!config.jestTestSelector.hideTestResults"
+        },
+        {
+          "id": "jestTestSelector.testSettings",
+          "name": "テスト設定",
+          "type": "webview",
+          "visibility": "visible"
         }
       ]
     },
@@ -72,7 +124,12 @@
           "group": "navigation"
         },
         {
-          "command": "jestTestSelector.runAllTests",
+          "command": "jestTestSelector.selectOptions",
+          "when": "view == jestTestSelector.testExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "jestTestSelector.openSettings",
           "when": "view == jestTestSelector.testExplorer",
           "group": "navigation"
         }
@@ -80,7 +137,42 @@
       "view/item/context": [
         {
           "command": "jestTestSelector.runSelectedTest",
-          "when": "view == jestTestSelector.testExplorer && viewItem == testCase",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == testCase || viewItem == testCase-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runPackageUnitTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == packageAllTests || viewItem == packageAllTests-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runPackageE2ETests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == packageAllTests || viewItem == packageAllTests-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runPackageAllTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == packageAllTests || viewItem == packageAllTests-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runDirectoryAllTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == directoryAllTests || viewItem == directoryAllTests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runDirectoryUnitTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == directoryUnitTests || viewItem == directoryUnitTests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runDirectoryE2ETests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == directoryE2ETests || viewItem == directoryE2ETests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
+          "group": "inline"
+        },
+        {
+          "command": "jestTestSelector.runFileAllTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == fileAllTests || viewItem == fileAllTests-highlighted)",
           "group": "inline"
         }
       ]
@@ -90,6 +182,16 @@
         "command": "jestTestSelector.runTest",
         "key": "ctrl+shift+t",
         "mac": "cmd+shift+t"
+      },
+      {
+        "command": "jestTestSelector.selectOptions",
+        "key": "ctrl+shift+o",
+        "mac": "cmd+shift+o"
+      },
+      {
+        "command": "jestTestSelector.runDirectoryTests",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
       }
     ],
     "configuration": {
@@ -110,10 +212,38 @@
           "default": "test",
           "description": "テスト実行コマンド"
         },
+        "jestTestSelector.jestExecutable": {
+          "type": "string",
+          "default": "npx jest",
+          "description": "Jest実行コマンド (例: jest, npx jest, node_modules/.bin/jest)"
+        },
         "jestTestSelector.monorepoPattern": {
           "type": "string",
           "default": "apps/*",
           "description": "モノレポのパッケージパターン (例: apps/*)"
+        },
+        "jestTestSelector.cliOptions": {
+          "type": "object",
+          "default": {
+            "--verbose": true,
+            "--colors": true
+          },
+          "description": "Jest CLI オプション設定"
+        },
+        "jestTestSelector.hideTestExplorer": {
+          "type": "boolean",
+          "default": false,
+          "description": "テストエクスプローラーを非表示にする"
+        },
+        "jestTestSelector.hideTestResults": {
+          "type": "boolean",
+          "default": false,
+          "description": "テスト結果を非表示にする"
+        },
+        "jestTestSelector.hideTestSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "テスト設定を非表示にする"
         }
       }
     }

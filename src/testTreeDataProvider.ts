@@ -5,7 +5,16 @@ import { TestCase, extractTestCases } from "./testExtractor";
 /**
  * TreeViewに表示するアイテムのタイプ
  */
-export type TestItemType = "file" | "describe" | "testCase";
+export type TestItemType =
+  | "file" // 通常のファイル
+  | "describe" // describeブロック
+  | "testCase" // 個別のテストケース
+  | "globalAllTests" // ワークスペース全体のテスト実行
+  | "directoryAllTests" // ディレクトリ内のすべてのテスト実行
+  | "directoryUnitTests" // ディレクトリ内のすべてのユニットテスト実行
+  | "directoryE2ETests" // ディレクトリ内のすべてのE2Eテスト実行
+  | "fileAllTests" // ファイル内のすべてのテスト実行
+  | "packageAllTests"; // パッケージのすべてのテスト実行
 
 /**
  * TreeViewアイテムのクラス
@@ -22,19 +31,58 @@ export class TestTreeItem extends vscode.TreeItem {
 
     // アイテムタイプに応じたアイコンを設定
     switch (type) {
+      case "packageAllTests":
+        this.iconPath = new vscode.ThemeIcon("package");
+        this.contextValue = "packageAllTests";
+        break;
+      case "directoryAllTests":
+        this.iconPath = new vscode.ThemeIcon("run-all");
+        this.tooltip = "このディレクトリのすべてのテストを実行";
+        this.contextValue = "directoryAllTests";
+        break;
+      case "directoryUnitTests":
+        this.iconPath = new vscode.ThemeIcon("beaker");
+        this.tooltip = "このディレクトリのすべてのユニットテストを実行";
+        this.contextValue = "directoryUnitTests";
+        break;
+      case "directoryE2ETests":
+        this.iconPath = new vscode.ThemeIcon("plug");
+        this.tooltip = "このディレクトリのすべてのE2Eテストを実行";
+        this.contextValue = "directoryE2ETests";
+        break;
+      case "fileAllTests":
+        this.iconPath = new vscode.ThemeIcon("beaker");
+        this.tooltip = "このファイルのすべてのテストを実行";
+        this.contextValue = "fileAllTests";
+        this.command = {
+          command: "vscode.open",
+          title: "ファイルを開く",
+          arguments: [vscode.Uri.file(filePath)],
+        };
+        break;
       case "file":
-        this.iconPath = new vscode.ThemeIcon("file-text");
+        this.iconPath = new vscode.ThemeIcon("folder"); // ディレクイトリのテスト
         this.tooltip = `ファイル: ${path.basename(filePath)}`;
         this.description = path.relative(
           vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "",
           filePath
         );
         this.contextValue = "testFile";
+        this.command = {
+          command: "vscode.open",
+          title: "ファイルを開く",
+          arguments: [vscode.Uri.file(filePath)],
+        };
         break;
       case "describe":
-        this.iconPath = new vscode.ThemeIcon("symbol-namespace");
+        this.iconPath = new vscode.ThemeIcon("beaker");
         this.tooltip = `テストグループ: ${label}`;
         this.contextValue = "testDescribe";
+        this.command = {
+          command: "vscode.open",
+          title: "ファイルを開く",
+          arguments: [vscode.Uri.file(filePath)],
+        };
         break;
       case "testCase":
         this.iconPath = new vscode.ThemeIcon("symbol-method");
@@ -42,13 +90,94 @@ export class TestTreeItem extends vscode.TreeItem {
           ? `テスト: ${testCase.name} (行: ${testCase.lineNumber})`
           : label;
         this.description = testCase ? `行: ${testCase.lineNumber}` : "";
-        this.command = {
-          command: "jestTestSelector.runSelectedTest",
-          title: "テストを実行",
-          arguments: [this],
-        };
         this.contextValue = "testCase";
+
+        if (testCase) {
+          // テストケースにある行番号があればその行にカーソルを移動して開く
+          this.command = {
+            command: "vscode.open",
+            title: "ファイルを開いてテストにジャンプ",
+            arguments: [
+              vscode.Uri.file(filePath),
+              {
+                selection: new vscode.Range(
+                  new vscode.Position(Math.max(0, testCase.lineNumber - 1), 0),
+                  new vscode.Position(Math.max(0, testCase.lineNumber - 1), 0)
+                ),
+              },
+            ],
+          };
+        } else {
+          this.command = {
+            command: "vscode.open",
+            title: "ファイルを開く",
+            arguments: [vscode.Uri.file(filePath)],
+          };
+        }
         break;
+    }
+
+    // 現在アクティブなエディタのファイルパスを取得
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) {
+      const activeFilePath = activeEditor.document.uri.fsPath;
+
+      // 現在のアイテムが現在フォーカスしているファイルと同じファイルの項目かチェック
+      if (
+        (type === "file" ||
+          type === "fileAllTests" ||
+          type === "testCase" ||
+          type === "describe") &&
+        path.normalize(filePath) === path.normalize(activeFilePath)
+      ) {
+        // 背景色を少し白くするためにハイライト用のアイコンを設定
+        const themeIconId =
+          this.iconPath instanceof vscode.ThemeIcon ? this.iconPath.id : "file";
+        this.iconPath = new vscode.ThemeIcon(
+          themeIconId,
+          new vscode.ThemeColor("list.highlightForeground")
+        );
+
+        // 元のコンテキスト値を保持しつつ、ハイライト用のコンテキスト値も追加
+        // スペースを含む形式だとVSCodeが正しく処理できないケースがあるので修正
+        if (this.contextValue) {
+          this.contextValue = `${this.contextValue}-highlighted`;
+        } else {
+          this.contextValue = "highlighted";
+        }
+        this.tooltip = `${this.tooltip || ""} [現在のファイル]`;
+
+        // 重要: ハイライト適用時もコマンドプロパティは維持
+        // 特定のタイプやコマンドがない場合のみファイルを開くコマンドを設定
+        if (!this.command && filePath) {
+          if (testCase && testCase.lineNumber > 0) {
+            // テストケースの行番号がある場合は、その行にジャンプするコマンド
+            this.command = {
+              command: "vscode.open",
+              title: "ファイルを開いてテストにジャンプ",
+              arguments: [
+                vscode.Uri.file(filePath),
+                {
+                  selection: new vscode.Range(
+                    new vscode.Position(
+                      Math.max(0, testCase.lineNumber - 1),
+                      0
+                    ),
+                    new vscode.Position(Math.max(0, testCase.lineNumber - 1), 0)
+                  ),
+                },
+              ],
+            };
+          } else {
+            // それ以外は単にファイルを開くコマンド
+            this.command = {
+              command: "vscode.open",
+              title: "ファイルを開く",
+              arguments: [vscode.Uri.file(filePath)],
+            };
+          }
+        }
+      }
     }
   }
 }
@@ -80,7 +209,12 @@ export class TestTreeDataProvider
   > = this._onDidChangeTreeData.event;
 
   private rootNodes: TestNode[] = [];
-  private lastActiveFilePath: string | undefined;
+  private lastActiveFilePath?: string;
+
+  // パッケージディレクトリのキャッシュ
+  private packageDirectoriesCache: {
+    [key: string]: { path: string; name: string };
+  } = {};
 
   constructor() {
     // アクティブエディタの変更を監視
@@ -92,36 +226,334 @@ export class TestTreeDataProvider
   }
 
   /**
-   * ツリービューを更新
+   * ルートレベルのノードを構築
+   * @returns ルートノードの配列
+   */
+  private buildRootNodes(): TestNode[] {
+    // ルートノード配列を作成（空の配列）
+    const rootNodes: TestNode[] = [];
+    return rootNodes;
+  }
+
+  /**
+   * 実装ファイルに対応するテストファイルのパスを取得
+   * @param filePath 実装ファイルのパス
+   * @returns 対応するテストファイルのパス（存在する場合）、または null
+   */
+  private async findCorrespondingTestFile(
+    filePath: string
+  ): Promise<string | null> {
+    // 既にテストファイルの場合はそのまま返す
+    if (this.isTestFile(filePath)) {
+      return filePath;
+    }
+
+    // ファイル名と拡張子を取得
+    const ext = path.extname(filePath);
+    const fileNameWithoutExt = path.basename(filePath, ext);
+    const dir = path.dirname(filePath);
+
+    // 想定されるテストファイル名を生成
+    const testFileName = `${fileNameWithoutExt}.test${ext}`;
+    const testFilePath = path.join(dir, testFileName);
+
+    // ファイルが存在するか確認
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(testFilePath));
+      return testFilePath;
+    } catch {
+      console.log(`対応するテストファイルが見つかりません: ${testFilePath}`);
+      return null;
+    }
+  }
+
+  /**
+   * 指定されたディレクトリ内のすべてのテストファイルを検索
+   * @param dirPath ディレクトリのパス
+   * @returns テストファイルのパスの配列
+   */
+  private async findAllTestFilesInDirectory(
+    dirPath: string
+  ): Promise<string[]> {
+    try {
+      // ディレクトリ内のファイルを取得
+      const entries = await vscode.workspace.fs.readDirectory(
+        vscode.Uri.file(dirPath)
+      );
+
+      // テストファイルをフィルタリング
+      const testFiles = entries
+        .filter(([name, type]) => {
+          return type === vscode.FileType.File && this.isTestFile(name);
+        })
+        .map(([name]) => path.join(dirPath, name));
+
+      return testFiles;
+    } catch (error) {
+      console.error(`ディレクトリの読み取りエラー: ${dirPath}`, error);
+      return [];
+    }
+  }
+
+  /**
+   * ディレクトリ内のすべてのテストファイルからテストツリーを構築
+   * @param dirPath ディレクトリパス
+   * @param testFiles テストファイルのパスの配列
+   */
+  private async buildDirectoryTestTree(
+    dirPath: string,
+    testFiles: string[]
+  ): Promise<void> {
+    try {
+      const dirName = path.basename(dirPath);
+      const directoryNode: TestNode = {
+        name: `${dirName}`,
+        type: "file",
+        filePath: dirPath,
+        children: [],
+      };
+
+      // ディレクトリノードをルートノードとして設定
+      this.rootNodes = [directoryNode];
+
+      // // 「すべてのテストを実行」ノードをディレクトリノードの直下に追加
+      // const allDirTestsNode: TestNode = {
+      //   name: "すべてのテストを実行",
+      //   type: "directoryAllTests",
+      //   filePath: dirPath,
+      //   children: [],
+      //   testCase: {
+      //     name: "すべてのテストを実行",
+      //     fullName: "すべてのテストを実行",
+      //     describePath: [],
+      //     lineNumber: 0,
+      //     isAllTests: true,
+      //     isDirectoryAllTests: true,
+      //   },
+      // };
+      // directoryNode.children.push(allDirTestsNode);
+
+      // 「ユニットテストのみ実行」ノードを追加
+      // const unitTestsNode: TestNode = {
+      //   name: "ユニットテストを実行",
+      //   type: "directoryUnitTests",
+      //   filePath: dirPath,
+      //   children: [],
+      //   testCase: {
+      //     name: "ユニットテストを実行",
+      //     fullName: "ユニットテストを実行",
+      //     describePath: [],
+      //     lineNumber: 0,
+      //     isAllTests: true,
+      //     isDirectoryAllTests: true,
+      //   },
+      // };
+      // directoryNode.children.push(unitTestsNode);
+
+      // // 「E2Eテストのみ実行」ノードを追加
+      // const e2eTestsNode: TestNode = {
+      //   name: "E2Eテストを実行",
+      //   type: "directoryE2ETests",
+      //   filePath: dirPath,
+      //   children: [],
+      //   testCase: {
+      //     name: "E2Eテストを実行",
+      //     fullName: "E2Eテストを実行",
+      //     describePath: [],
+      //     lineNumber: 0,
+      //     isAllTests: true,
+      //     isDirectoryAllTests: true,
+      //   },
+      // };
+      // directoryNode.children.push(e2eTestsNode);
+
+      // すべてのテストファイルからテストケースを抽出
+      for (const testFile of testFiles) {
+        const testCases = await extractTestCases(testFile);
+        if (testCases.length === 0) {
+          continue;
+        }
+
+        // ファイル名を取得
+        const fileName = path.basename(testFile);
+        // extractParamsプレフィックスを持つファイルは特別扱い
+        const isExtractParamsFile =
+          fileName.startsWith("extractParams") && fileName.endsWith(".test.ts");
+
+        // ファイルノードを作成
+        const fileNode: TestNode = {
+          name: fileName,
+          type: "describe",
+          filePath: testFile,
+          children: [],
+        };
+        directoryNode.children.push(fileNode);
+
+        // すべてのテストを実行するノードを追加
+        const allTestsNode: TestNode = {
+          name: "All Tests",
+          type: "testCase",
+          filePath: testFile,
+          children: [],
+          testCase: {
+            name: "All Tests",
+            fullName: "All Tests",
+            describePath: [],
+            lineNumber: 0,
+            isAllTests: true,
+          },
+        };
+        fileNode.children.push(allTestsNode);
+
+        // 各テストケースをツリーに追加
+        for (const testCase of testCases) {
+          // extractParamsファイルの場合はフラットに表示
+          if (isExtractParamsFile) {
+            const testNode: TestNode = {
+              name: testCase.name,
+              type: "testCase",
+              filePath: testFile,
+              children: [],
+              testCase,
+            };
+            fileNode.children.push(testNode);
+          } else {
+            let currentNode = fileNode;
+            const describePath = [...testCase.describePath]; // コピーを作成
+
+            // describeブロックのパスに沿ってノードを構築
+            for (const descName of describePath) {
+              // 既存のノードを探す
+              let descNode = currentNode.children.find(
+                (child) => child.type === "describe" && child.name === descName
+              );
+
+              // 存在しなければ新規作成
+              if (!descNode) {
+                descNode = {
+                  name: descName,
+                  type: "describe",
+                  filePath: testFile,
+                  children: [],
+                };
+                currentNode.children.push(descNode);
+              }
+
+              // 次のレベルへ
+              currentNode = descNode;
+            }
+
+            // テストケースノードを追加
+            const testNode: TestNode = {
+              name: testCase.name,
+              type: "testCase",
+              filePath: testFile,
+              children: [],
+              testCase,
+            };
+            currentNode.children.push(testNode);
+          }
+        }
+      }
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `テストツリーの構築エラー: ${
+          error instanceof Error ? error.message : "不明なエラー"
+        }`
+      );
+    }
+  }
+
+  /**
+   * テストツリーを更新
    */
   public async refresh(): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
-    if (editor && this.isTestFile(editor.document.uri.fsPath)) {
-      try {
-        const currentFilePath = editor.document.uri.fsPath;
+    try {
+      // ルートノードを初期化
+      this.rootNodes = this.buildRootNodes();
 
-        // 現在のファイルが前回と同じ場合は不要な更新をスキップ
+      // 現在アクティブなエディタを取得
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        // エディタが開かれていない場合は空のツリーを表示
+        this._onDidChangeTreeData.fire();
+        return;
+      }
+
+      const filePath = editor.document.uri.fsPath;
+      this.lastActiveFilePath = filePath;
+
+      const currentDirPath = path.dirname(filePath);
+
+      // Jest設定ファイルのあるパッケージディレクトリを検索
+      const packageInfo = await this.findPackageDirectoryWithJestConfig(
+        filePath
+      );
+
+      // ディレクトリ内のすべてのテストファイルを検索
+      const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
+
+      if (testFiles.length > 0) {
+        // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
+        // 現在のディレクトリが前回と同じ場合は不要な更新をスキップ
         if (
-          this.lastActiveFilePath === currentFilePath &&
-          this.rootNodes.length > 0
+          this.lastActiveFilePath === currentDirPath &&
+          this.rootNodes.length > 1 &&
+          this.rootNodes[1].name === `${path.basename(currentDirPath)}`
         ) {
           return;
         }
 
-        // テストファイルのパスを保存
-        this.lastActiveFilePath = currentFilePath;
+        // ディレクトリパスを保存（区別のため）
+        this.lastActiveFilePath = currentDirPath;
 
-        // ツリーデータをリフレッシュ
-        this.rootNodes = [];
-        await this.buildTestTree(this.lastActiveFilePath);
+        // ディレクトリベースのツリーを構築
+        await this.buildDirectoryTestTree(currentDirPath, testFiles);
+
+        // パッケージ情報が見つかった場合、パッケージノードを追加
+        if (packageInfo) {
+          this.addPackageTestNode(packageInfo);
+        }
+
         this._onDidChangeTreeData.fire();
-      } catch (error) {
-        vscode.window.showErrorMessage(
-          `テストツリーの構築エラー: ${
-            error instanceof Error ? error.message : "不明なエラー"
-          }`
-        );
+        return;
       }
+
+      // テストファイルを特定
+      let testFilePath: string | null = null;
+
+      if (this.isTestFile(filePath)) {
+        // 現在のファイルがテストファイルの場合はそのまま使用
+        testFilePath = filePath;
+      } else {
+        // 実装ファイルの場合は対応するテストファイルを探す
+        testFilePath = await this.findCorrespondingTestFile(filePath);
+      }
+
+      // テストファイルが見つからない場合は何もしない
+      if (!testFilePath) {
+        return;
+      }
+
+      // 現在のファイルが前回と同じ場合は不要な更新をスキップ
+      if (
+        this.lastActiveFilePath === testFilePath &&
+        this.rootNodes.length > 0 &&
+        this.rootNodes[0].type === "file" &&
+        this.rootNodes[0].name === path.basename(testFilePath)
+      ) {
+        return;
+      }
+
+      // テストファイルのパスを保存
+      this.lastActiveFilePath = testFilePath;
+
+      // ツリーデータをリフレッシュ
+      this.rootNodes = [];
+      await this.buildTestTree(this.lastActiveFilePath);
+      this._onDidChangeTreeData.fire();
+    } catch (error) {
+      console.error("テストツリーの更新に失敗しました:", error);
     }
   }
 
@@ -130,61 +562,90 @@ export class TestTreeDataProvider
    */
   private async buildTestTree(filePath: string): Promise<void> {
     try {
-      // テストケースを抽出
       const testCases = await extractTestCases(filePath);
-      if (testCases.length === 0) {
-        return;
-      }
-
-      // ファイルのルートノードを作成
       const fileName = path.basename(filePath);
+
+      // ファイルノードを作成
       const fileNode: TestNode = {
-        name: fileName,
+        name: path.basename(filePath),
         type: "file",
         filePath,
         children: [],
       };
 
-      // rootNodesが別の非同期処理で変更される可能性があるため、追加前にクリアする
-      this.rootNodes = [];
-      this.rootNodes.push(fileNode);
+      // workspaceNodeを保持し、ファイルノードを追加
+      const workspaceNode = this.rootNodes[0]; // ワークスペース全体のテストを実行ノード
+      this.rootNodes = [workspaceNode, fileNode];
+
+      // すべてのテストを実行するノード
+      const allTestsNode: TestNode = {
+        name: "All Tests",
+        type: "fileAllTests",
+        filePath,
+        children: [],
+        testCase: {
+          name: "All Tests",
+          fullName: "All Tests",
+          describePath: [],
+          lineNumber: 0,
+          isAllTests: true,
+        },
+      };
+      fileNode.children.push(allTestsNode);
+
+      // extractParamsプレフィックスを持つファイルは特別扱い
+      const isExtractParamsFile =
+        fileName.startsWith("extractParams") && fileName.endsWith(".test.ts");
 
       // 各テストケースをツリーに追加
       for (const testCase of testCases) {
-        let currentNode = fileNode;
-        const describePath = [...testCase.describePath]; // コピーを作成
+        // extractParamsファイルの場合はフラットに表示
+        if (isExtractParamsFile) {
+          const testNode: TestNode = {
+            name: testCase.name,
+            type: "testCase",
+            filePath,
+            children: [],
+            testCase,
+          };
+          fileNode.children.push(testNode);
+        } else {
+          // 通常のファイルは従来通りdescribeネストを使用
+          let currentNode = fileNode;
+          const describePath = [...testCase.describePath]; // コピーを作成
 
-        // describeブロックのパスに沿ってノードを構築
-        for (const descName of describePath) {
-          // 既存のノードを探す
-          let descNode = currentNode.children.find(
-            (child) => child.type === "describe" && child.name === descName
-          );
+          // describeブロックのパスに沿ってノードを構築
+          for (const descName of describePath) {
+            // 既存のノードを探す
+            let descNode = currentNode.children.find(
+              (child) => child.type === "describe" && child.name === descName
+            );
 
-          // 存在しなければ新規作成
-          if (!descNode) {
-            descNode = {
-              name: descName,
-              type: "describe",
-              filePath,
-              children: [],
-            };
-            currentNode.children.push(descNode);
+            // 存在しなければ新規作成
+            if (!descNode) {
+              descNode = {
+                name: descName,
+                type: "describe",
+                filePath,
+                children: [],
+              };
+              currentNode.children.push(descNode);
+            }
+
+            // 次のレベルへ
+            currentNode = descNode;
           }
 
-          // 次のレベルへ
-          currentNode = descNode;
+          // テストケースノードを追加
+          const testNode: TestNode = {
+            name: testCase.name,
+            type: "testCase",
+            filePath,
+            children: [],
+            testCase,
+          };
+          currentNode.children.push(testNode);
         }
-
-        // テストケースノードを追加
-        const testNode: TestNode = {
-          name: testCase.name,
-          type: "testCase",
-          filePath,
-          children: [],
-          testCase,
-        };
-        currentNode.children.push(testNode);
       }
     } catch (error) {
       vscode.window.showErrorMessage(
@@ -204,65 +665,23 @@ export class TestTreeDataProvider
   }
 
   /**
-   * ツリービューのルート要素を取得
+   * 指定された要素の子ノードを取得
+   * @param element 親要素。未指定の場合はルートレベルの要素を返す
    */
-  public getChildren(element?: TestTreeItem): Thenable<TestTreeItem[]> {
-    // アクティブなエディタがテストファイルでない場合、空のリストを返す
+  public async getChildren(element?: TestTreeItem): Promise<TestTreeItem[]> {
     if (!element) {
-      const editor = vscode.window.activeTextEditor;
-
-      if (!editor || !this.isTestFile(editor.document.uri.fsPath)) {
-        // 前回のファイルがあれば、それを使用
-        if (this.lastActiveFilePath && this.rootNodes.length === 0) {
-          this.buildTestTree(this.lastActiveFilePath).then(() => {
-            this._onDidChangeTreeData.fire();
-          });
-        }
-        return Promise.resolve(
-          this.rootNodes.map(
-            (node) =>
-              new TestTreeItem(
-                node.name,
-                vscode.TreeItemCollapsibleState.Expanded,
-                node.type,
-                node.filePath
-              )
-          )
+      // ルートレベルの要素
+      return this.rootNodes.map((node) => {
+        return new TestTreeItem(
+          node.name,
+          node.children.length > 0
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.None,
+          node.type,
+          node.filePath,
+          node.testCase
         );
-      }
-
-      const filePath = editor.document.uri.fsPath;
-
-      // 新しいファイルに切り替わった場合のみツリーを再構築
-      if (this.lastActiveFilePath !== filePath) {
-        this.lastActiveFilePath = filePath;
-        this.rootNodes = []; // ルートノードをクリア
-        return this.buildTestTree(filePath).then(() => {
-          // ルートノードのツリーアイテムを返す
-          return this.rootNodes.map(
-            (node) =>
-              new TestTreeItem(
-                node.name,
-                vscode.TreeItemCollapsibleState.Expanded,
-                node.type,
-                node.filePath
-              )
-          );
-        });
-      }
-
-      // ルートノードのツリーアイテムを返す
-      return Promise.resolve(
-        this.rootNodes.map(
-          (node) =>
-            new TestTreeItem(
-              node.name,
-              vscode.TreeItemCollapsibleState.Expanded,
-              node.type,
-              node.filePath
-            )
-        )
-      );
+      });
     }
 
     // 子要素を取得
@@ -316,5 +735,101 @@ export class TestTreeDataProvider
    */
   public getTreeItem(element: TestTreeItem): vscode.TreeItem {
     return element;
+  }
+
+  /**
+   * 現在のファイルパスからJest設定ファイルがあるパッケージディレクトリを見つける
+   * @param filePath ファイルパス
+   * @returns パッケージディレクトリのパスと名前
+   */
+  private async findPackageDirectoryWithJestConfig(
+    filePath: string
+  ): Promise<{ path: string; name: string } | null> {
+    try {
+      // キャッシュをチェック
+      if (this.packageDirectoriesCache[filePath]) {
+        return this.packageDirectoriesCache[filePath];
+      }
+
+      const fs = require("fs");
+      const path = require("path");
+      const workspaceFolder = vscode.workspace.getWorkspaceFolder(
+        vscode.Uri.file(filePath)
+      );
+
+      if (!workspaceFolder) {
+        return null;
+      }
+
+      // ファイルパスからディレクトリを取得
+      let currentDir = path.dirname(filePath);
+      const workspacePath = workspaceFolder.uri.fsPath;
+
+      // ルートパターン (apps/*/jest.config.js) に合致するまで親ディレクトリを遡る
+      while (currentDir.startsWith(workspacePath)) {
+        // Jest設定ファイルの存在をチェック
+        const jestConfigPath = path.join(currentDir, "jest.config.js");
+
+        if (fs.existsSync(jestConfigPath)) {
+          // 見つかったパッケージディレクトリ名を取得
+          const packageName = path.basename(currentDir);
+
+          // キャッシュに保存
+          const result = { path: currentDir, name: packageName };
+          this.packageDirectoriesCache[filePath] = result;
+
+          return result;
+        }
+
+        // 親ディレクトリへ
+        const parentDir = path.dirname(currentDir);
+
+        // ルートに到達したら終了
+        if (parentDir === currentDir) {
+          break;
+        }
+
+        currentDir = parentDir;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(
+        "パッケージディレクトリの検索中にエラーが発生しました:",
+        error
+      );
+      return null;
+    }
+  }
+
+  /**
+   * パッケージのテスト実行ノードを追加
+   * @param packageInfo パッケージ情報
+   */
+  private addPackageTestNode(packageInfo: {
+    path: string;
+    name: string;
+  }): void {
+    // ルートノードに「パッケージのすべてのテストを実行」ノードを追加
+    const packageNode: TestNode = {
+      name: `${packageInfo.name}`,
+      type: "packageAllTests",
+      filePath: packageInfo.path,
+      children: [],
+      testCase: {
+        name: `${packageInfo.name}`,
+        fullName: `${packageInfo.name}`,
+        describePath: [],
+        lineNumber: 0,
+        isAllTests: true,
+      },
+    };
+
+    // ルートノードの先頭にパッケージノードを追加
+    if (this.rootNodes.length === 0) {
+      this.rootNodes.push(packageNode);
+    } else {
+      this.rootNodes.unshift(packageNode);
+    }
   }
 }

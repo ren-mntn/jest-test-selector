@@ -1,1 +1,21 @@
 node_modules
+
+# React Component Preview
+previewConfig.json
+
+# Compiled output
+out/
+dist/
+
+# VS Code extension packaging
+*.vsix
+
+# VS Code Test Runner
+.vscode-test/
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,117 @@
+/* テスト設定ビュー用のスタイル */
+body {
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-foreground);
+  padding: 8px;
+  background-color: var(--vscode-editor-background);
+  font-size: 0.9em;
+  height: 100vh;
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  margin-bottom: 8px;
+  color: var(--vscode-titleBar-activeForeground);
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.header h3 {
+  margin: 0 0 8px 0;
+  font-size: 1em;
+  font-weight: bold;
+}
+
+.options-container {
+  overflow-y: auto;
+  margin-bottom: 10px;
+  flex-grow: 1;
+  padding-right: 8px;
+}
+
+/* カテゴリのスタイル */
+.option-category {
+  margin-bottom: 16px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.category-title {
+  margin: 0 0 6px 0;
+  font-size: 0.95em;
+  color: var(--vscode-panelTitle-activeForeground);
+  border-bottom: 1px solid var(--vscode-panelTitle-activeBorder);
+  padding-bottom: 3px;
+}
+
+.category-items {
+  padding-left: 2px;
+}
+
+/* オプション項目のスタイル */
+.option-item {
+  margin-bottom: 3px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background-color: transparent;
+  transition: all 0.2s ease;
+}
+
+.option-item:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.option-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 3px 2px;
+  position: relative;
+}
+
+.option-label {
+  font-weight: normal;
+  margin-left: 6px;
+  font-size: 0.8em;
+  cursor: pointer;
+}
+
+/* チェックボックスのスタイル */
+.checkbox {
+  margin: 0;
+  cursor: pointer;
+  width: 12px;
+  height: 12px;
+  accent-color: var(--vscode-button-background);
+}
+
+/* 保存ステータスのスタイル */
+.save-status {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 0.8em;
+  visibility: hidden;
+  padding: 4px;
+  border-radius: 3px;
+  position: fixed;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--vscode-notifications-background);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  min-width: 120px;
+}
+
+.save-status.success {
+  color: var(--vscode-testing-iconPassed);
+  border-left: 3px solid var(--vscode-testing-iconPassed);
+}
+
+.save-status.error {
+  color: var(--vscode-testing-iconFailed);
+  border-left: 3px solid var(--vscode-testing-iconFailed);
+}

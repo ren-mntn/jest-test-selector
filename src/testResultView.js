@@ -8,7 +8,7 @@ var vscode = require("vscode");
 var TestResultView = /** @class */ (function () {
     function TestResultView(_extensionUri) {
         this._extensionUri = _extensionUri;
-        this._lastOutput = '';
+        this._lastOutput = "";
         this._isRunning = false;
     }
     /**
@@ -26,7 +26,7 @@ var TestResultView = /** @class */ (function () {
     TestResultView.prototype.registerView = function (view) {
         this._view = view;
         this._view.webview.options = {
-            enableScripts: true
+            enableScripts: true,
         };
         // 最後の出力があれば表示
         if (this._lastOutput) {
@@ -43,7 +43,7 @@ var TestResultView = /** @class */ (function () {
         // 基本的なANSIエスケープシーケンスをHTML/CSSに変換
         var ansiToHtml = text
             // リセット
-            .replace(/\u001b\[0m/g, '</span>')
+            .replace(/\u001b\[0m/g, "</span>")
             // 赤色（エラー）
             .replace(/\u001b\[31m/g, '<span class="ansi-red">')
             // 緑色（成功）
@@ -61,7 +61,7 @@ var TestResultView = /** @class */ (function () {
             // 太字
             .replace(/\u001b\[1m/g, '<span class="ansi-bold">')
             // その他のエスケープシーケンスを除去
-            .replace(/\u001b\[\d+(;\d+)*m/g, '');
+            .replace(/\u001b\[\d+(;\d+)*m/g, "");
         return ansiToHtml;
     };
     /**
@@ -96,7 +96,7 @@ var TestResultView = /** @class */ (function () {
         // 30秒後に自動的にローディング状態を終了するタイムアウト
         this._runningTimeout = setTimeout(function () {
             if (_this._isRunning) {
-                console.log('Test running state timeout reached, forcing finish');
+                console.log("Test running state timeout reached, forcing finish");
                 _this.finishRunningState();
             }
         }, 30000);
@@ -116,7 +116,7 @@ var TestResultView = /** @class */ (function () {
             this._runningTimeout = undefined;
         }
         if (this._isRunning) {
-            console.log('Finishing running state, was running:', this._isRunning);
+            console.log("Finishing running state, was running:", this._isRunning);
             this._isRunning = false;
             // 最後の出力内容を再表示（ローディングインジケータなし）
             if (this._view) {
@@ -162,20 +162,20 @@ var TestResultView = /** @class */ (function () {
      */
     TestResultView.prototype.escapeHtml = function (unsafe) {
         return unsafe
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     };
     /**
      * WebViewのHTMLを生成
      */
     TestResultView.prototype.getWebviewContent = function (content) {
-        var _a;
+        var _a, _b;
         // スタイルシートのリソースパスを取得
-        var styleMainUri = (_a = this._view) === null || _a === void 0 ? void 0 : _a.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.css'));
-        return "<!DOCTYPE html>\n    <html lang=\"ja\">\n    <head>\n      <meta charset=\"UTF-8\">\n      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n      <link href=\"".concat(styleMainUri, "\" rel=\"stylesheet\">\n      <style>\n        body {\n          font-family: var(--vscode-font-family);\n          font-size: var(--vscode-font-size);\n          color: var(--vscode-foreground);\n          padding: 10px;\n          line-height: 1.5;\n        }\n        pre {\n          white-space: pre-wrap;\n          word-wrap: break-word;\n          margin: 0;\n          font-family: var(--vscode-editor-font-family);\n        }\n        .running {\n          text-align: center;\n          padding: 20px;\n        }\n        .test-name {\n          font-weight: bold;\n        }\n        .spinner {\n          margin: 20px auto;\n          width: 50px;\n          height: 50px;\n          border: 5px solid rgba(255, 255, 255, 0.3);\n          border-radius: 50%;\n          border-top-color: var(--vscode-button-background);\n          animation: spin 1s ease-in-out infinite;\n        }\n        @keyframes spin {\n          to { transform: rotate(360deg); }\n        }\n        \n        /* ANSI\u30AB\u30E9\u30FC\u306E\u30B9\u30BF\u30A4\u30EB */\n        .ansi-red { color: #f44747; }\n        .ansi-green { color: #6a9955; }\n        .ansi-yellow { color: #d7ba7d; }\n        .ansi-blue { color: #569cd6; }\n        .ansi-magenta { color: #c586c0; }\n        .ansi-cyan { color: #4ec9b0; }\n        .ansi-white { color: #e0e0e0; }\n        .ansi-bold { font-weight: bold; }\n      </style>\n      <title>Jest \u30C6\u30B9\u30C8\u7D50\u679C</title>\n    </head>\n    <body>\n      <pre>").concat(content, "</pre>\n    </body>\n    </html>");
+        var styleMainUri = (_a = this._view) === null || _a === void 0 ? void 0 : _a.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "main.css"));
+        return "<!DOCTYPE html>\n    <html lang=\"ja\">\n    <head>\n      <meta charset=\"UTF-8\">\n      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n      <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src ".concat((_b = this._view) === null || _b === void 0 ? void 0 : _b.webview.cspSource, " 'unsafe-inline';\">\n      <link href=\"").concat(styleMainUri, "\" rel=\"stylesheet\">\n      <style>\n        body {\n          font-family: var(--vscode-font-family);\n          font-size: var(--vscode-font-size);\n          color: var(--vscode-foreground);\n          padding: 10px;\n          line-height: 1.5;\n        }\n        pre {\n          white-space: pre-wrap;\n          word-wrap: break-word;\n          margin: 0;\n          font-family: var(--vscode-editor-font-family);\n        }\n        .running {\n          text-align: center;\n          padding: 20px;\n        }\n        .test-name {\n          font-weight: bold;\n        }\n        .spinner {\n          margin: 20px auto;\n          width: 50px;\n          height: 50px;\n          border: 5px solid rgba(255, 255, 255, 0.3);\n          border-radius: 50%;\n          border-top-color: var(--vscode-button-background);\n          animation: spin 1s ease-in-out infinite;\n        }\n        @keyframes spin {\n          to { transform: rotate(360deg); }\n        }\n        \n        /* ANSI\u30AB\u30E9\u30FC\u306E\u30B9\u30BF\u30A4\u30EB */\n        .ansi-red { color: #f44747; }\n        .ansi-green { color: #6a9955; }\n        .ansi-yellow { color: #d7ba7d; }\n        .ansi-blue { color: #569cd6; }\n        .ansi-magenta { color: #c586c0; }\n        .ansi-cyan { color: #4ec9b0; }\n        .ansi-white { color: #e0e0e0; }\n        .ansi-bold { font-weight: bold; }\n        \n        /* \u30C6\u30B9\u30C8\u7D50\u679C\u306E\u8868\u793A\u30B9\u30BF\u30A4\u30EB */\n        .pass { color: #6a9955; }\n        .fail { color: #f44747; }\n        .error { color: #f44747; }\n        .error-message { \n          background-color: rgba(244, 71, 71, 0.1); \n          padding: 10px;\n          border-radius: 4px;\n        }\n      </style>\n      <title>Jest \u30C6\u30B9\u30C8\u7D50\u679C</title>\n    </head>\n    <body>\n      ").concat(content, "\n    </body>\n    </html>");
     };
     return TestResultView;
 }());
@@ -188,10 +188,11 @@ var TestResultProvider = /** @class */ (function () {
         this.extensionUri = extensionUri;
     }
     TestResultProvider.prototype.resolveWebviewView = function (webviewView, _context, _token) {
+        console.log("TestResultProvider.resolveWebviewView called");
         // Webviewの設定
         webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri]
+            enableScripts: false,
+            localResourceRoots: [this.extensionUri],
         };
         // ビューをTestResultViewに登録
         TestResultView.getInstance(this.extensionUri).registerView(webviewView);
