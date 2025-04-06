@@ -160,7 +160,6 @@ export function activate(context: vscode.ExtensionContext) {
       "jestTestSelector.refreshTests",
       async () => {
         await testTreeDataProvider.refresh();
-        vscode.window.showInformationMessage("テストリストを更新しました");
       }
     );
     disposables.push(refreshTestsDisposable);

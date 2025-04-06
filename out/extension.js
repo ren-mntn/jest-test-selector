@@ -144,7 +144,6 @@ function activate(context) {
         // テストリストを更新するコマンドを登録
         const refreshTestsDisposable = vscode.commands.registerCommand("jestTestSelector.refreshTests", async () => {
             await testTreeDataProvider.refresh();
-            vscode.window.showInformationMessage("テストリストを更新しました");
         });
         disposables.push(refreshTestsDisposable);
         // ディレクトリ内のすべてのテストを実行するコマンド

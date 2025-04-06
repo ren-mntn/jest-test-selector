@@ -57,9 +57,7 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
       // パッケージ全体のテストを実行するケース
       if (runBoth) {
         // 両方（Unit + E2E）実行する場合
-        vscode.window.showInformationMessage(
-          `パッケージ ${targetPackage.name} のユニットテストとE2Eテストを実行します`
-        );
+        // 通知を削除
 
         // カスタムコマンドを構築
         const testCmd = await JestDebugger.prepareDirectoryTestCommand(
@@ -78,9 +76,7 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
         );
       } else if (unitTestOnly) {
         // ユニットテストのみ実行
-        vscode.window.showInformationMessage(
-          `パッケージ ${targetPackage.name} のユニットテストを実行します`
-        );
+        // 通知を削除
 
         // カスタムコマンドを構築
         const testCmd = await JestDebugger.prepareDirectoryTestCommand(
@@ -99,9 +95,7 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
         );
       } else if (e2eTestOnly) {
         // E2Eテストのみ実行
-        vscode.window.showInformationMessage(
-          `パッケージ ${targetPackage.name} のE2Eテストを実行します`
-        );
+        // 通知を削除
 
         // カスタムコマンドを構築
         const testCmd = await JestDebugger.prepareDirectoryTestCommand(
@@ -122,29 +116,21 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
     } else if (scope === "directory") {
       // ディレクトリに対するテスト実行
       if (e2eTestOnly) {
-        vscode.window.showInformationMessage(
-          `ディレクトリ ${path.basename(targetPath)} の E2E テストを実行します`
-        );
+        // 通知を削除
         success = await JestDebugger.startDebuggingDirectoryTests(
           targetPath,
           targetPackage,
           "e2e"
         );
       } else if (unitTestOnly) {
-        vscode.window.showInformationMessage(
-          `ディレクトリ ${path.basename(
-            targetPath
-          )} のユニットテストを実行します`
-        );
+        // 通知を削除
         success = await JestDebugger.startDebuggingDirectoryTests(
           targetPath,
           targetPackage,
           "unit"
         );
       } else {
-        vscode.window.showInformationMessage(
-          `ディレクトリ ${path.basename(targetPath)} のテストを実行します`
-        );
+        // 通知を削除
         success = await JestDebugger.startDebuggingDirectoryTests(
           targetPath,
           targetPackage,
@@ -154,18 +140,14 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
     } else if (scope === "file") {
       // ファイルに対するテスト実行
       if (testCase) {
-        vscode.window.showInformationMessage(
-          `テスト '${testCase.name}' を実行します`
-        );
+        // 通知を削除
         success = await JestDebugger.startDebugging(
           targetPath,
           testCase,
           targetPackage
         );
       } else {
-        vscode.window.showInformationMessage(
-          `ファイル ${path.basename(targetPath)} のすべてのテストを実行します`
-        );
+        // 通知を削除
         success = await JestDebugger.startDebuggingAllTests(
           targetPath,
           targetPackage
@@ -176,9 +158,7 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
       if (!testCase) {
         throw new Error("テストケースが指定されていません");
       }
-      vscode.window.showInformationMessage(
-        `テスト '${testCase.name}' を実行します`
-      );
+      // 通知を削除
       success = await JestDebugger.startDebugging(
         targetPath,
         testCase,
