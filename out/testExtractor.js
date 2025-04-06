@@ -52,6 +52,8 @@ async function extractTestCases(filePath) {
         const blockDepthStack = [];
         // 現在の中括弧の深さ
         let currentDepth = 0;
+        // ファイル内にdescribe.onlyがあるかどうか
+        let hasDescribeOnly = false;
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             // 行内の中括弧をカウント
@@ -69,14 +71,20 @@ async function extractTestCases(filePath) {
                     }
                 }
             }
+            // describe.onlyの検出
+            if (/describe\.only\(\s*['"]/.test(line)) {
+                hasDescribeOnly = true;
+            }
             // describeブロックの検出
-            const describeMatch = line.match(/describe\(\s*['"](.+?)['"]/);
+            const describeMatch = line.match(/describe(?:\.only)?\(\s*['"](.+?)['"]/);
             if (describeMatch) {
                 describeStack.push(describeMatch[1]);
                 // describeが見つかった時点での深さを記録（次の中括弧開始の前）
                 blockDepthStack.push(currentDepth);
                 continue;
             }
+            // onlyがついているかどうかを検出
+            const hasOnly = /(?:test|it)\.only\(\s*['"]/.test(line);
             // testケースの検出（test.onlyも検出）
             const testMatch = line.match(/(?:test|it)(?:\.only)?\(\s*['"](.+?)['"]/);
             if (testMatch) {
@@ -88,8 +96,15 @@ async function extractTestCases(filePath) {
                     describePath: currentDescribePath,
                     fullName,
                     lineNumber: i + 1,
+                    hasOnly: hasOnly || hasDescribeOnly, // test.onlyまたはdescribe.onlyがある場合はtrue
                 });
             }
+        }
+        // ファイル内にdescribe.onlyがある場合、すべてのテストケースにhasOnlyフラグを設定
+        if (hasDescribeOnly) {
+            testCases.forEach((testCase) => {
+                testCase.hasOnly = true;
+            });
         }
         return testCases;
     }

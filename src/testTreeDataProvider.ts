@@ -159,6 +159,18 @@ export class TestTreeItem extends vscode.TreeItem {
       return;
     }
 
+    // test.onlyが検出された場合、警告アイコンと警告メッセージを設定
+    if (this.testCase.hasOnly) {
+      this.iconPath = new vscode.ThemeIcon(
+        "warning",
+        new vscode.ThemeColor("testing.iconErrored")
+      );
+      this.tooltip = `${
+        this.tooltip || ""
+      } [警告: test.onlyまたはit.onlyが使用されています。コミット前に削除してください。]`;
+      return;
+    }
+
     // テスト結果を取得
     const testResult = JestDebugger.getTestResult(
       this.filePath,
@@ -242,8 +254,17 @@ export class TestTreeDataProvider
     TestTreeItem | undefined | null | void
   > = this._onDidChangeTreeData.event;
 
+  // .onlyの検出を通知するためのイベント
+  private _onDidDetectOnly: vscode.EventEmitter<boolean> =
+    new vscode.EventEmitter<boolean>();
+  readonly onDidDetectOnly: vscode.Event<boolean> = this._onDidDetectOnly.event;
+
   private rootNodes: TestNode[] = [];
   private lastActiveFilePath?: string;
+  private failedTestsNode: TestNode | null = null;
+  private _hasDetectedOnly: boolean = false;
+  // .onlyを含むファイルとテスト情報のリスト
+  private _onlyLocations: { filePath: string; testCase: TestCase }[] = [];
 
   // パッケージディレクトリのキャッシュ
   private packageDirectoriesCache: {
@@ -276,6 +297,17 @@ export class TestTreeDataProvider
       onTestSessionEnd(() => {
         // テストセッションが終了したらツリービューを更新
         this._onDidChangeTreeData.fire();
+      })
+    );
+
+    // テキスト変更リスナーを追加
+    this.disposables.push(
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        const filePath = event.document.uri.fsPath;
+        // テストファイルの変更を検出したら更新
+        if (this.isTestFile(filePath)) {
+          this.updateTestFile(filePath);
+        }
       })
     );
   }
@@ -381,10 +413,32 @@ export class TestTreeDataProvider
       this.rootNodes = [directoryNode];
 
       // すべてのテストファイルからテストケースを抽出
+      // .onlyの検出状態をトラッキング
+      let hasOnlyInAnyFile = false;
+
+      // .onlyの位置情報をリセット
+      this._onlyLocations = [];
+
       for (const testFile of testFiles) {
         const testCases = await extractTestCases(testFile);
         if (testCases.length === 0) {
           continue;
+        }
+
+        // ファイル内にonly付きのテストがあるかチェック
+        const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
+        if (hasOnlyInFile) {
+          hasOnlyInAnyFile = true;
+
+          // .onlyを含むテストケースをリストに追加
+          testCases
+            .filter((testCase) => testCase.hasOnly)
+            .forEach((testCase) => {
+              this._onlyLocations.push({
+                filePath: testFile,
+                testCase,
+              });
+            });
         }
 
         // ファイル名を取得
@@ -414,6 +468,7 @@ export class TestTreeDataProvider
             describePath: [],
             lineNumber: 0,
             isAllTests: true,
+            hasOnly: hasOnlyInFile, // ファイル内にonly付きのテストがある場合はtrueを設定
           },
         };
         fileNode.children.push(allTestsNode);
@@ -468,6 +523,14 @@ export class TestTreeDataProvider
           }
         }
       }
+
+      // すべてのファイルの処理が終わった後、.onlyの検出状態を更新
+      console.log(`ディレクトリ内のファイルのhasOnly状態: ${hasOnlyInAnyFile}`);
+      if (this._hasDetectedOnly !== hasOnlyInAnyFile) {
+        this._hasDetectedOnly = hasOnlyInAnyFile;
+        this._onDidDetectOnly.fire(hasOnlyInAnyFile);
+        console.log(`onDidDetectOnlyイベントを発火: ${hasOnlyInAnyFile}`);
+      }
     } catch (error) {
       vscode.window.showErrorMessage(
         `テストツリーの構築エラー: ${
@@ -485,6 +548,10 @@ export class TestTreeDataProvider
       console.log("テストツリーデータの更新を開始");
       // ルートノードを初期化
       this.rootNodes = this.buildRootNodes();
+
+      // .onlyの検出状態をリセット
+      this._hasDetectedOnly = false;
+      this._onlyLocations = [];
 
       // 現在アクティブなエディタを取得
       const editor = vscode.window.activeTextEditor;
@@ -597,6 +664,33 @@ export class TestTreeDataProvider
       const testCases = await extractTestCases(filePath);
       const fileName = path.basename(filePath);
 
+      // ファイル内にonly付きのテストがあるかチェック
+      const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
+
+      // .onlyの位置情報を更新
+      this._onlyLocations = this._onlyLocations.filter(
+        (loc) => loc.filePath !== filePath
+      );
+
+      if (hasOnlyInFile) {
+        // .onlyを含むテストケースをリストに追加
+        testCases
+          .filter((testCase) => testCase.hasOnly)
+          .forEach((testCase) => {
+            this._onlyLocations.push({
+              filePath: filePath,
+              testCase,
+            });
+          });
+      }
+
+      // .onlyの検出状態が変化した場合にイベントを発火
+      const hasAnyOnly = this._onlyLocations.length > 0;
+      if (this._hasDetectedOnly !== hasAnyOnly) {
+        this._hasDetectedOnly = hasAnyOnly;
+        this._onDidDetectOnly.fire(hasAnyOnly);
+      }
+
       // ファイルノードを作成
       const fileNode: TestNode = {
         name: path.basename(filePath),
@@ -621,6 +715,7 @@ export class TestTreeDataProvider
           describePath: [],
           lineNumber: 0,
           isAllTests: true,
+          hasOnly: hasOnlyInFile, // ファイル内にonly付きのテストがある場合はtrueを設定
         },
       };
       fileNode.children.push(allTestsNode);
@@ -873,6 +968,66 @@ export class TestTreeDataProvider
       this.rootNodes.push(packageNode);
     } else {
       this.rootNodes.unshift(packageNode);
+    }
+  }
+
+  /**
+   * 現在の.only検出状態を返します
+   * @returns .onlyが検出されたらtrue、そうでなければfalse
+   */
+  public getHasDetectedOnly(): boolean {
+    return this._hasDetectedOnly;
+  }
+
+  /**
+   * .onlyを含むテストケースの位置情報を返します
+   * @returns .onlyを含むテストケースの位置情報のリスト
+   */
+  public getOnlyLocations(): { filePath: string; testCase: TestCase }[] {
+    return this._onlyLocations;
+  }
+
+  /**
+   * 単一のテストファイルの内容を更新
+   */
+  private async updateTestFile(filePath: string): Promise<void> {
+    try {
+      const testCases = await extractTestCases(filePath);
+
+      // ファイル内にonly付きのテストがあるかチェック
+      const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
+
+      // このファイルの.only位置情報を削除
+      this._onlyLocations = this._onlyLocations.filter(
+        (loc) => loc.filePath !== filePath
+      );
+
+      if (hasOnlyInFile) {
+        // .onlyを含むテストケースをリストに追加
+        testCases
+          .filter((testCase) => testCase.hasOnly)
+          .forEach((testCase) => {
+            this._onlyLocations.push({
+              filePath: filePath,
+              testCase,
+            });
+          });
+      }
+
+      // .onlyの検出状態が変化した場合にイベントを発火
+      const hasAnyOnly = this._onlyLocations.length > 0;
+      if (this._hasDetectedOnly !== hasAnyOnly) {
+        this._hasDetectedOnly = hasAnyOnly;
+        this._onDidDetectOnly.fire(hasAnyOnly);
+      }
+
+      // テストツリーを更新（現在のファイルがこのファイルの場合のみ）
+      if (this.lastActiveFilePath === filePath) {
+        await this.buildTestTree(filePath);
+        this._onDidChangeTreeData.fire();
+      }
+    } catch (error) {
+      console.error(`テストファイル更新エラー: ${filePath}`, error);
     }
   }
 }

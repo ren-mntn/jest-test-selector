@@ -93,6 +93,11 @@
         "command": "jestTestSelector.toggleCoverage",
         "title": "カバレッジ出力を切り替え",
         "icon": "$(shield)"
+      },
+      {
+        "command": "jestTestSelector.goToOnlyLocation",
+        "title": "test.only検出箇所に移動",
+        "icon": "$(warning)"
       }
     ],
     "viewsContainers": {
@@ -248,6 +253,11 @@
           "type": "boolean",
           "default": false,
           "description": "テスト結果を非表示にする"
+        },
+        "jestTestSelector.showOnlyWarning": {
+          "type": "boolean",
+          "default": true,
+          "description": "test.onlyやdescribe.onlyが検出された場合に警告を表示する"
         },
         "jestTestSelector.hideTestSettings": {
           "type": "boolean",
