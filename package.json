@@ -2,7 +2,7 @@
   "name": "jest-test-selector",
   "displayName": "Jest Test Selector",
   "description": "モノレポ構造に対応したJestテストケース選択実行ツール",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "custom-publisher",
   "repository": {
     "type": "git",
@@ -72,7 +72,7 @@
       {
         "command": "jestTestSelector.runFileAllTests",
         "title": "ファイルの全てのテストを実行",
-        "icon": "$(beaker)"
+        "icon": "$(run-all)"
       },
       {
         "command": "jestTestSelector.refreshTests",
@@ -170,6 +170,11 @@
           "group": "inline"
         },
         {
+          "command": "jestTestSelector.runFileAllTests",
+          "when": "view == jestTestSelector.testExplorer && (viewItem == runnableTestFile || viewItem == runnableTestFile-highlighted || viewItem =~ /runnableTestFile/)",
+          "group": "inline"
+        },
+        {
           "command": "jestTestSelector.runDirectoryAllTests",
           "when": "view == jestTestSelector.testExplorer && (viewItem == directoryAllTests || viewItem == directoryAllTests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
           "group": "inline"
@@ -182,11 +187,6 @@
         {
           "command": "jestTestSelector.runDirectoryE2ETests",
           "when": "view == jestTestSelector.testExplorer && (viewItem == directoryE2ETests || viewItem == directoryE2ETests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
-          "group": "inline"
-        },
-        {
-          "command": "jestTestSelector.runFileAllTests",
-          "when": "view == jestTestSelector.testExplorer && (viewItem == fileAllTests || viewItem == fileAllTests-highlighted)",
           "group": "inline"
         }
       ]

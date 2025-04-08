@@ -1,43 +1,29 @@
-import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { PackageInfo } from "./monorepoDetector";
 import { TestCase } from "./testExtractor";
+import {
+  TestResultInfo,
+  TestResultState,
+  TestResultStatus,
+  cleanupOldResults,
+  cleanupTempFiles,
+  getJestCliArgs as getJestCliArgsProcessor,
+  getTestResult as getTestResultFromState,
+  initializeTestResultState,
+  loadHistoryFile,
+  parseTestResults,
+  readTestResultsFromFile as readTestResultsFromFileProcessor,
+  saveTestResultsToHistory,
+  setTestResult as setTestResultInState,
+  testSessionEndEventEmitter,
+} from "./testResultProcessor";
 
 // テスト出力と結果のためのイベント
 export const testOutputEventEmitter = new vscode.EventEmitter<string>();
 export const onTestOutput = testOutputEventEmitter.event;
 
-export const testSessionEndEventEmitter = new vscode.EventEmitter<void>();
-export const onTestSessionEnd = testSessionEndEventEmitter.event;
-
-// テスト結果の種類
-export enum TestResultStatus {
-  Success = "success",
-  Failure = "failure",
-  Unknown = "unknown",
-  Running = "running",
-  Skipped = "skipped",
-  Pending = "pending",
-}
-
-// テスト結果の情報
-export interface TestResultInfo {
-  status: TestResultStatus;
-  message?: string;
-  timestamp: number;
-}
-
-// テスト履歴ファイルのデータ構造
-interface TestHistoryData {
-  testResults: {
-    [filePath: string]: {
-      [testName: string]: TestResultInfo;
-    };
-  };
-  lastUpdated: number;
-}
+// テスト結果の種類を再エクスポート
+export { TestResultInfo, TestResultStatus };
 
 /**
  * デバッグセッションの設定と実行を管理するクラス
@@ -49,165 +35,21 @@ export class JestDebugger {
   private static debugTerminal: vscode.Terminal | undefined;
   private static testOutputContent: string = "";
 
-  // テスト結果を保持するマップ - キー: ファイルパス#テスト名、値: 結果情報
-  private static testResults: Map<string, TestResultInfo> = new Map();
-
-  // テスト結果ファイルのパスを保持する変数
-  private static jsonOutputFilePath: string | null = null;
-
-  // 履歴ファイルの定数
-  private static readonly HISTORY_DIR_NAME = ".jest-test-selector";
-  private static readonly HISTORY_FILE_NAME = "history.json";
-  private static historyDirPath: string | null = null;
-  private static historyFilePath: string | null = null;
-
-  /**
-   * 履歴ディレクトリと履歴ファイルパスを初期化する
-   */
-  private static initHistoryFilePath(): void {
-    if (this.historyFilePath) {
-      return;
-    }
-
-    try {
-      // OSの一時ディレクトリを基準にする
-      const tempDir = os.tmpdir();
-
-      // .jest-test-selecterディレクトリを作成（存在しない場合）
-      this.historyDirPath = path.join(tempDir, "jest-test-selecter");
-
-      // 履歴ディレクトリが存在しない場合は作成
-      if (!fs.existsSync(this.historyDirPath))
-        fs.mkdirSync(this.historyDirPath, { recursive: true });
-
-      // 履歴ファイルのパスを生成
-      this.historyFilePath = path.join(
-        this.historyDirPath,
-        this.HISTORY_FILE_NAME
-      );
-      console.log(`履歴ファイルのパス: ${this.historyFilePath}`);
-    } catch (error) {
-      console.error(`履歴ディレクトリ作成エラー: ${error}`);
-    }
-  }
+  // テスト結果状態
+  private static testResultState: TestResultState = initializeTestResultState();
 
   /**
    * 履歴ファイルからテスト結果を読み込む
    */
   public static loadHistoryFile(): void {
-    try {
-      this.initHistoryFilePath();
-
-      // 履歴ファイルパスが初期化されていない場合
-      if (!this.historyFilePath) return;
-
-      // 履歴ファイルが存在しない場合
-      if (!fs.existsSync(this.historyFilePath)) return;
-
-      const fileContent = fs.readFileSync(this.historyFilePath, "utf8");
-
-      // 履歴ファイルが空の場合
-      if (!fileContent || fileContent.trim() === "") return;
-
-      const historyData: TestHistoryData = JSON.parse(fileContent);
-
-      // 履歴ファイルが空の場合
-      if (!historyData.testResults) return;
-
-      // マップに変換して保存
-      let count = 0;
-      for (const [filePath, testResults] of Object.entries(
-        historyData.testResults
-      )) {
-        for (const [testName, resultInfo] of Object.entries(testResults)) {
-          const key = `${filePath}#${testName}`;
-          this.testResults.set(key, resultInfo);
-          count++;
-        }
-      }
-
-      // 30日以上経過したテスト結果を削除（オプション）
-      this.cleanupOldResults(30);
-
-      // UI更新のためのイベント発火
-      testSessionEndEventEmitter.fire();
-    } catch (error) {
-      console.error(`履歴ファイル読み込みエラー: ${error}`);
-    }
+    this.testResultState = loadHistoryFile(this.testResultState);
   }
 
   /**
    * 現在のテスト結果を履歴ファイルに保存する
    */
   private static saveTestResultsToHistory(): void {
-    try {
-      this.initHistoryFilePath();
-
-      // 履歴ファイルパスが初期化されていない場合はエラー
-      if (!this.historyFilePath) return;
-
-      // 既存の履歴ファイルがあれば読み込む
-      let historyData: TestHistoryData = {
-        testResults: {},
-        lastUpdated: Date.now(),
-      };
-
-      // マージ中に追加または更新されたテスト結果の数をカウント
-      let addedCount = 0;
-      let updatedCount = 0;
-
-      // 現在のテスト結果をマージ
-      for (const [key, value] of this.testResults.entries()) {
-        const [filePath, testName] = key.split("#");
-        if (!filePath || !testName) {
-          continue;
-        }
-
-        // スキップされたテストはマージしない
-        if (
-          value.status === TestResultStatus.Unknown ||
-          value.status === TestResultStatus.Skipped ||
-          value.status === TestResultStatus.Pending
-        )
-          continue;
-
-        // ファイルパスのエントリがなければ作成
-        if (!historyData.testResults[filePath]) {
-          historyData.testResults[filePath] = {};
-        }
-
-        // テスト結果を追加/更新
-        const existingResult = historyData.testResults[filePath][testName];
-        if (!existingResult) {
-          addedCount++;
-        } else {
-          // 既存のテスト結果と現在のテスト結果を比較
-          if (
-            existingResult.status !== value.status ||
-            existingResult.message !== value.message
-          ) {
-            updatedCount++;
-          }
-        }
-
-        historyData.testResults[filePath][testName] = value;
-      }
-
-      // 最終更新日時を更新
-      historyData.lastUpdated = Date.now();
-
-      // ファイルに保存
-      fs.writeFileSync(
-        this.historyFilePath,
-        JSON.stringify(historyData, null, 2),
-        "utf8"
-      );
-
-      // 一時ファイルがあれば削除
-      this.cleanupTempFiles();
-    } catch (error) {
-      console.error(`履歴ファイル保存エラー: ${error}`);
-    }
+    this.testResultState = saveTestResultsToHistory(this.testResultState);
   }
 
   /**
@@ -215,21 +57,10 @@ export class JestDebugger {
    * @param daysToKeep 保持する日数
    */
   private static cleanupOldResults(daysToKeep: number): void {
-    // 現在時刻から指定日数前のタイムスタンプを計算
-    const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
+    this.testResultState = cleanupOldResults(this.testResultState, daysToKeep);
 
-    let removedCount = 0;
-
-    // テスト結果マップをループして古い結果を削除
-    for (const [key, value] of this.testResults.entries()) {
-      if (value.timestamp < cutoffTime) {
-        this.testResults.delete(key);
-        removedCount++;
-      }
-    }
-
-    if (removedCount > 0) {
-      // 履歴ファイルを更新
+    // 変更があった場合は履歴ファイルを更新
+    if (this.testResultState.testResults.size > 0) {
       this.saveTestResultsToHistory();
     }
   }
@@ -238,13 +69,7 @@ export class JestDebugger {
    * 一時ファイルを削除する 一時ファイルを見たいときはコメントアウト
    */
   private static cleanupTempFiles(): void {
-    if (this.jsonOutputFilePath && fs.existsSync(this.jsonOutputFilePath)) {
-      try {
-        fs.unlinkSync(this.jsonOutputFilePath);
-      } catch (error) {
-        console.log(`一時ファイル削除エラー: ${error}`);
-      }
-    }
+    this.testResultState = cleanupTempFiles(this.testResultState);
   }
 
   /**
@@ -272,131 +97,13 @@ export class JestDebugger {
    */
   private static parseTestResults(output: string): void {
     try {
-      // JSON形式のテスト結果を探す（--jsonフラグ使用時）
-      const jsonRegex =
-        /\{[\s\S]*"numFailedTestSuites"[\s\S]*"testResults"[\s\S]*\}/g;
-      const jsonMatches = [...output.matchAll(jsonRegex)];
-      if (jsonMatches.length > 0) {
-        try {
-          const jsonStr = jsonMatches[0][0];
-          const jsonData = JSON.parse(jsonStr);
-          if (jsonData.testResults && jsonData.testResults.length > 0) {
-            // JSONデータからテスト結果を処理
-            this.processJsonResults(jsonData);
-            // セッション終了イベントを発火してUIを更新
-            testSessionEndEventEmitter.fire();
-            return; // JSON解析に成功したらここで終了
-          }
-        } catch (error) {
-          console.error("JSON解析エラー:", error);
-          // 解析エラーの場合は従来の方法で継続
-        }
-      }
-
-      // テストファイルパスを先に解析
-      let filePathRegexPatterns = [
-        /(PASS|FAIL)\s+(.+\.test\.[tj]sx?)$/gm, // 標準的なJest出力形式
-        /Test Suites:.*\n.*?((?:\/|\\).+\.test\.[tj]sx?)$/gm, // テストサマリー内のパス
-        /Running\s+test\s+suite\s+(.+\.test\.[tj]sx?)$/gm, // "Running test suite"の形式
-        /node_modules\/jest\/bin\/jest\.js\s+(.+\.test\.[tj]sx?)$/gm, // Jest実行コマンド内のパス
-        /RUN\s+(.+\.test\.[tj]sx?)$/gm, // Jest Runner出力形式
-      ];
-
-      let currentFilePath: string | null = null;
-
-      // 複数のパターンを試して最初に一致したものを使用
-      for (const regexPattern of filePathRegexPatterns) {
-        const matches = [...output.matchAll(regexPattern)];
-        if (matches.length > 0) {
-          for (const match of matches) {
-            const extractedPath = match[match.length - 1].trim(); // 最後のキャプチャグループがパス
-            if (extractedPath && this.isValidTestFilePath(extractedPath)) {
-              currentFilePath = extractedPath;
-              break;
-            }
-          }
-          if (currentFilePath) break;
-        }
-      }
-
-      // ファイルパスが見つからなかった場合は別の方法で再試行
-      if (!currentFilePath) {
-        currentFilePath = this.getCurrentTestFilePath();
-      }
-
-      if (!currentFilePath) {
-        return;
-      }
-
-      // 検出したファイルパスを正規化
-      currentFilePath = path.normalize(currentFilePath);
-
-      // 複数の成功パターン・失敗パターンを試す
-      const successPatterns = [
-        /[✓✅]\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // ✓または✅マークつき
-        /PASS\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // PASSマーク
-        /passed\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gim, // passed文字列
-      ];
-
-      // 複数パターンを試して成功テストを検出
-      for (const pattern of successPatterns) {
-        let successMatch;
-        while ((successMatch = pattern.exec(output)) !== null) {
-          const testName = successMatch[1].trim();
-          const key = `${currentFilePath}#${testName}`;
-          this.testResults.set(key, {
-            status: TestResultStatus.Success,
-            timestamp: Date.now(),
-          });
-        }
-      }
-
-      // Jest 29/30 形式に対応した失敗テスト検出パターン
-      const failurePatterns = [
-        /[✕✗]\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // ✕または✗マークつき
-        /FAIL\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // FAILマーク
-        /failed\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gim, // failed文字列
-      ];
-
-      // 複数パターンを試して失敗テストを検出
-      for (const pattern of failurePatterns) {
-        let failureMatch;
-        while ((failureMatch = pattern.exec(output)) !== null) {
-          const testName = failureMatch[1].trim();
-          const key = `${currentFilePath}#${testName}`;
-          this.testResults.set(key, {
-            status: TestResultStatus.Failure,
-            timestamp: Date.now(),
-          });
-        }
-      }
-
-      // スキップされたテスト検出パターン
-      const skipPatterns = [
-        /[⚠]\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // ⚠マークつき
-        /SKIP\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gm, // SKIPマーク
-        /skipped\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gim, // skipped文字列
-        /pending\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gim, // pending文字列
-        /disabled\s+([^\n]+?)(?:\s+\([0-9]+\s*m?s\))?$/gim, // disabled文字列
-      ];
-
-      // 複数パターンを試してスキップテストを検出
-      for (const pattern of skipPatterns) {
-        let skipMatch;
-        while ((skipMatch = pattern.exec(output)) !== null) {
-          const testName = skipMatch[1].trim();
-          const key = `${currentFilePath}#${testName}`;
-          this.testResults.set(key, {
-            status: TestResultStatus.Skipped,
-            timestamp: Date.now(),
-          });
-        }
-      }
-
-      // テスト結果が見つからない場合は、ファイルから結果を更新
-      if (this.testResults.size === 0 && currentFilePath) {
-        this.updateTestResultsFromFilePath(currentFilePath);
-      }
+      this.testResultState = parseTestResults(
+        this.testResultState,
+        output,
+        () => this.getCurrentTestFilePath(),
+        (path) => this.isValidTestFilePath(path),
+        (state, filePath) => this.updateTestResultsFromFilePath(state, filePath)
+      );
     } catch (error) {
       console.error("テスト結果のパース中にエラーが発生しました:", error);
     }
@@ -413,9 +120,14 @@ export class JestDebugger {
     }
 
     // テスト結果ファイルが存在すれば読み込み
-    if (this.jsonOutputFilePath) {
-      this.readTestResultsFromFile(this.jsonOutputFilePath)
-        .then(() => {
+    if (this.testResultState.jsonOutputFilePath) {
+      readTestResultsFromFileProcessor(
+        this.testResultState,
+        this.testResultState.jsonOutputFilePath
+      )
+        .then((updatedState) => {
+          // 状態を更新
+          this.testResultState = updatedState;
           // テスト結果の読み込みが成功したら履歴ファイルにマージして保存
           this.saveTestResultsToHistory();
           // 一時ファイルの削除
@@ -440,109 +152,6 @@ export class JestDebugger {
     setTimeout(() => {
       testSessionEndEventEmitter.fire();
     }, 500);
-  }
-
-  /**
-   * JSONテスト結果から結果を処理
-   */
-  private static processJsonResults(jsonData: any): number {
-    if (
-      !jsonData ||
-      !jsonData.testResults ||
-      !Array.isArray(jsonData.testResults)
-    ) {
-      return 0;
-    }
-
-    // ワークスペースルートを取得
-    const workspaceRoot =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
-
-    let totalResults = 0;
-
-    for (const result of jsonData.testResults) {
-      const testFilePath = result.name;
-
-      // ファイルパスの正規化（Windowsパスの考慮）
-      let normalizedPath = testFilePath.replace(/\\/g, "/");
-
-      // 絶対パスを相対パスに変換
-      let relativePath = normalizedPath;
-      if (normalizedPath.startsWith(workspaceRoot)) {
-        relativePath = path.relative(workspaceRoot, normalizedPath);
-      }
-
-      // パスの正規化（ファイルシステムの違いを吸収）
-      relativePath = relativePath.replace(/\\/g, "/");
-
-      // テスト結果が使用可能かどうか確認
-      if (!result.assertionResults || !Array.isArray(result.assertionResults)) {
-        continue;
-      }
-
-      // 各テストのアサーション結果を処理
-      for (const assertion of result.assertionResults) {
-        // テスト名を取得
-        const testName = assertion.fullName || assertion.title;
-
-        // テスト結果のステータスを判定
-        const status =
-          assertion.status === "passed"
-            ? TestResultStatus.Success
-            : assertion.status === "failed"
-            ? TestResultStatus.Failure
-            : assertion.status === "pending"
-            ? TestResultStatus.Pending
-            : assertion.status === "skipped"
-            ? TestResultStatus.Skipped
-            : TestResultStatus.Unknown;
-
-        // 複数のキーパターンでテスト結果を保存（検索のマッチングを改善するため）
-        // 1. 標準の相対パス形式
-        const standardKey = `${relativePath}#${testName}`;
-        this.testResults.set(standardKey, {
-          status,
-          message: assertion.failureMessages?.join("\n"),
-          timestamp: Date.now(),
-        });
-
-        // 2. ファイル名のみのパターン
-        const baseNameOnly = path.basename(testFilePath);
-        const baseNameKey = `${baseNameOnly}#${testName}`;
-        this.testResults.set(baseNameKey, {
-          status,
-          message: assertion.failureMessages?.join("\n"),
-          timestamp: Date.now(),
-        });
-
-        // 3. 元の絶対パス形式
-        const absoluteKey = `${normalizedPath}#${testName}`;
-        this.testResults.set(absoluteKey, {
-          status,
-          message: assertion.failureMessages?.join("\n"),
-          timestamp: Date.now(),
-        });
-
-        // 4. テスト名に含まれるファイル名を特定し、パスの違いを考慮
-        if (testName.includes("getCouponsFromFitshop")) {
-          // テスト名から余分なプレフィックスを削除したキーを追加
-          const trimmedTestName = testName.replace(
-            /^getCouponsFromFitshop\s+/,
-            ""
-          );
-          const trimmedKey = `${relativePath}#${trimmedTestName}`;
-          this.testResults.set(trimmedKey, {
-            status,
-            message: assertion.failureMessages?.join("\n"),
-            timestamp: Date.now(),
-          });
-        }
-
-        totalResults++;
-      }
-    }
-
-    return totalResults;
   }
 
   /**
@@ -621,87 +230,21 @@ export class JestDebugger {
     filePath: string,
     testName: string
   ): TestResultInfo | undefined {
-    // パスの正規化（Windowsパスの考慮）
-    filePath = filePath.replace(/\\/g, "/");
-
-    // 絶対パスから相対パスへの変換を試みる
-    const workspaceRoot =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
-
-    let relativeFilePath = filePath;
-    if (filePath.startsWith(workspaceRoot)) {
-      relativeFilePath = path.relative(workspaceRoot, filePath);
-    }
-
-    // 以下のパターンでテスト結果を検索
-    // 1. 標準パターン - 相対パス
-    const standardKey = `${relativeFilePath}#${testName}`;
-    let result = this.testResults.get(standardKey);
-    if (result) {
-      return result;
-    }
-
-    // 2. ファイル名のみのパターン
-    const baseNameOnly = path.basename(filePath);
-    const baseNameKey = `${baseNameOnly}#${testName}`;
-    result = this.testResults.get(baseNameKey);
-    if (result) {
-      return result;
-    }
-
-    // 3. 絶対パスパターン
-    const absoluteKey = `${filePath}#${testName}`;
-    result = this.testResults.get(absoluteKey);
-    if (result) {
-      return result;
-    }
-
-    // 4. testNameの前に"getCouponsFromFitshop "があるケースで検索
-    // (JSONデータのフォーマットに合わせるため)
-    const prefixedKey1 = `${relativeFilePath}#getCouponsFromFitshop ${testName}`;
-    result = this.testResults.get(prefixedKey1);
-    if (result) {
-      return result;
-    }
-
-    // 5. ファイル名のみ + プレフィックス付きテスト名
-    const prefixedKey2 = `${baseNameOnly}#getCouponsFromFitshop ${testName}`;
-    result = this.testResults.get(prefixedKey2);
-    if (result) {
-      return result;
-    }
-
-    // 6. 部分一致検索（ファイル名を含むキーとテスト名を含むキーを探す）
-    const fileBaseName = path.basename(filePath, path.extname(filePath));
-
-    for (const [mapKey, mapResult] of this.testResults.entries()) {
-      // テスト名の部分一致ロジックを改善
-      if (
-        mapKey.includes(testName) ||
-        mapKey.includes(`getCouponsFromFitshop ${testName}`)
-      ) {
-        // ファイル名も一致するか確認
-        if (mapKey.includes(fileBaseName) || mapKey.includes(baseNameOnly)) {
-          return mapResult;
-        }
-      }
-    }
-
-    return undefined;
+    return getTestResultFromState(this.testResultState, filePath, testName);
   }
 
   /**
    * 現在のテスト結果をクリア
    */
   public static clearTestResults(): void {
-    this.testResults.clear();
+    this.testResultState = initializeTestResultState();
   }
 
   /**
    * テスト結果のマップ全体を取得
    */
   public static getAllTestResults(): Map<string, TestResultInfo> {
-    return this.testResults;
+    return this.testResultState.testResults;
   }
 
   /**
@@ -714,23 +257,30 @@ export class JestDebugger {
     status: TestResultStatus,
     message?: string
   ): void {
-    const key = `${filePath}#${testName}`;
-    console.log(`テスト結果を強制設定: ${key} -> ${status}`);
-    this.testResults.set(key, {
+    this.testResultState = setTestResultInState(
+      this.testResultState,
+      filePath,
+      testName,
       status,
-      message,
-      timestamp: Date.now(),
-    });
+      message
+    );
+  }
 
-    // 結果が変更されたことを通知
-    testSessionEndEventEmitter.fire();
+  /**
+   * 正規表現の特殊文字をエスケープするヘルパーメソッド
+   */
+  private static escapeRegExp(string: string): string {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   /**
    * テスト出力パターンを一致させるための特別なヘルパー
    * ファイルパスから実行されたテストの結果を手動で設定する
    */
-  public static updateTestResultsFromFilePath(filePath: string): void {
+  public static updateTestResultsFromFilePath(
+    state: TestResultState,
+    filePath: string
+  ): TestResultState {
     try {
       const testOutput = this.testOutputContent;
       // テスト名を抽出する正規表現パターン - describeとtest/itを検出
@@ -738,6 +288,7 @@ export class JestDebugger {
 
       let match;
       const foundTests = new Set<string>();
+      const newTestResults = new Map(state.testResults);
 
       while ((match = testNameRegex.exec(testOutput)) !== null) {
         const testName = match[2].trim();
@@ -751,37 +302,25 @@ export class JestDebugger {
               ? TestResultStatus.Failure
               : TestResultStatus.Success;
 
-          this.setTestResult(filePath, testName, status);
+          const key = `${filePath}#${testName}`;
+          newTestResults.set(key, {
+            status,
+            timestamp: Date.now(),
+          });
         }
       }
 
       // テスト終了イベントを発火
       testSessionEndEventEmitter.fire();
+
+      return {
+        ...state,
+        testResults: newTestResults,
+      };
     } catch (error) {
       console.error("手動テスト結果更新中にエラーが発生しました:", error);
+      return state;
     }
-  }
-
-  /**
-   * テスト結果の一時ファイルパスを生成
-   */
-  private static generateJsonOutputFilePath(): string {
-    // 履歴ディレクトリを初期化（同じディレクトリを使用する）
-    this.initHistoryFilePath();
-
-    if (!this.historyDirPath) {
-      // 何らかの理由でhistoryDirPathが設定されていない場合、一時的なフォールバック
-      const timestamp = Date.now();
-      const tempDir = os.tmpdir();
-      const outputFileName = `jest-results-${timestamp}.json`;
-      return path.join(tempDir, outputFileName);
-    }
-
-    // 履歴ディレクトリと同じディレクトリに一時ファイルを生成
-    const timestamp = Date.now();
-    const outputFileName = `jest-results-${timestamp}.json`;
-    const outputFilePath = path.join(this.historyDirPath, outputFileName);
-    return outputFilePath;
   }
 
   /**
@@ -790,42 +329,11 @@ export class JestDebugger {
   private static getJestCliArgs(savedOptions: {
     [key: string]: any;
   }): string[] {
-    const args: string[] = [];
-
-    // テスト結果出力のための一時ファイルパスを生成
-    const outputFilePath = this.generateJsonOutputFilePath();
-    this.jsonOutputFilePath = outputFilePath;
-
-    // 常に追加する必須オプション
-    // ただし、ユーザーが明示的に指定している場合はそちらを優先するためにここでは追加しない
-    const hasOutputFile = Object.keys(savedOptions).some(
-      (key) => key === "--outputFile"
+    const [args, updatedState] = getJestCliArgsProcessor(
+      this.testResultState,
+      savedOptions
     );
-    if (!hasOutputFile) {
-      args.push("--outputFile", outputFilePath);
-    }
-
-    // オプションを文字列配列に変換
-    Object.entries(savedOptions).forEach(([key, value]) => {
-      // キーが有効なフラグ形式かチェック
-      if (!key.startsWith("--")) return;
-
-      // 真偽値オプション
-      if (typeof value === "boolean") {
-        if (value) {
-          args.push(key);
-        }
-      }
-      // 文字列オプション
-      else if (typeof value === "string" && value.trim() !== "") {
-        args.push(key, value);
-      }
-      // 数値オプション
-      else if (typeof value === "number") {
-        args.push(key, value.toString());
-      }
-    });
-
+    this.testResultState = updatedState;
     return args;
   }
 
@@ -836,7 +344,7 @@ export class JestDebugger {
     workspaceFolder: vscode.WorkspaceFolder,
     debugConfig: vscode.DebugConfiguration
   ): Promise<boolean> {
-    // テスト出力をクリア
+    // テスト出力をクリア（テスト結果はクリアしない）
     this.clearOutput();
 
     // ターミナル出力をキャプチャするためのセットアップ
@@ -859,7 +367,7 @@ export class JestDebugger {
       // テスト実行後に結果を強制更新するためのタイマーを設定
       setTimeout(() => {
         // テスト実行後、結果が取得できない場合に備えて強制的に更新
-        this.updateTestResultsFromFilePath(testFilePath);
+        this.updateTestResultsFromFilePath(this.testResultState, testFilePath);
       }, 5000);
     }
 
@@ -885,241 +393,6 @@ export class JestDebugger {
       }
     }
     return null;
-  }
-
-  /**
-   * テスト名を完全一致させるための正規表現パターンを作成
-   */
-  // private static createExactMatchPattern(testName: string): string {
-  //   // Jestのテスト名完全一致パターン（ドキュメント推奨の形式）
-  //   return this.escapeRegExp(testName);
-  // }
-
-  /**
-   * 選択されたテストケースでデバッグセッションを開始する
-   * @param testFilePath テストファイルのパス（相対パスまたは絶対パス）
-   * @param testCase 実行するテストケース
-   * @param packageInfo 対象のパッケージ情報
-   */
-  public static async startDebugging(
-    testFilePath: string,
-    testCase: TestCase,
-    packageInfo: PackageInfo
-  ): Promise<boolean> {
-    try {
-      // 絶対パスを構築
-      const absoluteFilePath = path.isAbsolute(testFilePath)
-        ? testFilePath
-        : path.resolve(packageInfo.path, testFilePath);
-
-      // e2eテストかどうかを判定
-      const isE2ETest = absoluteFilePath.endsWith(".e2e.test.ts");
-      console.log(`Is E2E test: ${isE2ETest}`);
-
-      // ワークスペースフォルダを取得
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(
-        vscode.Uri.file(absoluteFilePath)
-      );
-      if (!workspaceFolder) {
-        throw new Error(
-          `ワークスペースフォルダが見つかりません (${absoluteFilePath})`
-        );
-      }
-
-      // 設定から実行オプションを取得
-      const config = vscode.workspace.getConfiguration("jestTestSelector");
-      const jestExecutableSetting = config.get<string>(
-        "jestExecutable",
-        "npx jest"
-      ); // 設定値を取得 (例: "npx jest")
-
-      // 設定値を実行可能ファイルと引数に分割
-      const [executable, ...initialArgs] = jestExecutableSetting.split(" ");
-      if (!executable) {
-        throw new Error(
-          `Invalid jestExecutable setting: ${jestExecutableSetting}`
-        );
-      }
-
-      // 保存されたCLIオプションを取得
-      const savedOptions =
-        config.get<{ [key: string]: any }>("cliOptions") || {};
-      const cliArgs = this.getJestCliArgs(savedOptions);
-
-      // 直接 Jest コマンドの引数を構築
-      const runtimeArgs: string[] = [
-        absoluteFilePath, // 常に絶対パスを使用
-      ];
-
-      // "All Tests"の場合は-tフラグを使わない
-      if (!testCase.isAllTests) runtimeArgs.push("-t", `${testCase.name}$`); // ターミナルから`^`を使えないのでサフィックス指定にしている。変更禁止
-
-      // E2Eテストかどうかに基づいて設定ファイルを追加
-      if (isE2ETest) {
-        runtimeArgs.push("--config", "jest.config.e2e.js");
-      } else {
-        runtimeArgs.push("--config", "jest.config.js");
-      }
-
-      // カスタムCLIオプションを追加
-      runtimeArgs.push(...cliArgs);
-
-      // ★変更: 実行可能ファイル(npx)と引数(jest ...)を結合
-      const finalRuntimeArgs = [...initialArgs, ...runtimeArgs];
-
-      const commandString = `${executable} ${finalRuntimeArgs.join(" ")}`; // ★ executable と finalRuntimeArgs を使用
-      console.log(`テスト実行コマンド: ${commandString}`);
-      console.log(`実行引数の配列: ${JSON.stringify(finalRuntimeArgs)}`);
-
-      // デバッグ設定を構築
-      const debugConfig: vscode.DebugConfiguration = {
-        type: "node",
-        request: "launch",
-        name: `Jest Debug: ${testCase.fullName}`,
-        runtimeExecutable: executable, // ★変更: npx など
-        runtimeArgs: finalRuntimeArgs, // ★変更: jest + ファイルパス + オプション
-        console: "integratedTerminal", // ターミナルを使用
-        cwd: packageInfo.path,
-        skipFiles: ["<node_internals>/**"],
-        outputCapture: "std", // 標準出力とエラー出力をキャプチャ
-        internalConsoleOptions: "neverOpen", // デバッグコンソールは自動的に開かない
-      };
-
-      return await this.startDebuggingCommon(workspaceFolder, debugConfig);
-    } catch (error) {
-      if (error instanceof Error) {
-        vscode.window.showErrorMessage(`デバッグ開始エラー: ${error.message}`);
-        console.error("Debug start error:", error);
-      } else {
-        vscode.window.showErrorMessage(
-          "デバッグセッションの開始に失敗しました"
-        );
-        console.error("Unknown debug start error:", error);
-      }
-      return false;
-    }
-  }
-
-  /**
-   * ファイル内のすべてのテストを実行する
-   * @param testFilePath テストファイルのパス（相対パスまたは絶対パス）
-   * @param packageInfo 対象のパッケージ情報
-   */
-  public static async startDebuggingAllTests(
-    testFilePath: string,
-    packageInfo: PackageInfo,
-    isE2ETest: boolean = false
-  ): Promise<boolean> {
-    try {
-      // 絶対パスを構築
-      const absoluteFilePath = path.isAbsolute(testFilePath)
-        ? testFilePath
-        : path.resolve(packageInfo.path, testFilePath);
-
-      // e2eテストかどうかを判定
-      const isE2ETest = absoluteFilePath.endsWith(".e2e.test.ts");
-
-      // ワークスペースフォルダを取得
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(
-        vscode.Uri.file(absoluteFilePath)
-      );
-      if (!workspaceFolder) {
-        throw new Error(
-          `ワークスペースフォルダが見つかりません (${absoluteFilePath})`
-        );
-      }
-
-      // 設定から実行オプションを取得
-      const config = vscode.workspace.getConfiguration("jestTestSelector");
-      const jestExecutableSetting = config.get<string>(
-        "jestExecutable",
-        "npx jest"
-      ); // 設定値を取得 (例: "npx jest")
-
-      // 設定値を実行可能ファイルと引数に分割
-      const [executable, ...initialArgs] = jestExecutableSetting.split(" ");
-      if (!executable) {
-        throw new Error(
-          `Invalid jestExecutable setting: ${jestExecutableSetting}`
-        );
-      }
-
-      // 保存されたCLIオプションを取得
-      const savedOptions =
-        config.get<{ [key: string]: any }>("cliOptions") || {};
-      const cliArgs = this.getJestCliArgs(savedOptions);
-
-      // 直接 Jest コマンドの引数を構築
-      const runtimeArgs: string[] = [
-        absoluteFilePath, // 常に絶対パスを使用
-      ];
-
-      // E2Eテストかどうかに基づいて設定ファイルを追加
-      if (isE2ETest) {
-        runtimeArgs.push("--config", "jest.config.e2e.js");
-      } else {
-        runtimeArgs.push("--config", "jest.config.js");
-      }
-
-      // カスタムCLIオプションを追加
-      runtimeArgs.push(...cliArgs);
-
-      // ★変更: 実行可能ファイル(npx)と引数(jest ...)を結合
-      const finalRuntimeArgs = [...initialArgs, ...runtimeArgs];
-
-      const commandString = `${executable} ${finalRuntimeArgs.join(" ")}`; // ★ executable と finalRuntimeArgs を使用
-
-      // デバッグ設定を構築
-      const debugConfig: vscode.DebugConfiguration = {
-        type: "node",
-        request: "launch",
-        name: `Jest Debug: ${path.basename(testFilePath)} (All Tests)`,
-        runtimeExecutable: executable, // ★変更: npx など
-        runtimeArgs: finalRuntimeArgs, // ★変更: jest + ファイルパス + オプション
-        console: "integratedTerminal", // ターミナルを使用
-        cwd: packageInfo.path,
-        skipFiles: ["<node_internals>/**"],
-        outputCapture: "std", // 標準出力とエラー出力をキャプチャ
-        internalConsoleOptions: "neverOpen", // デバッグコンソールは自動的に開かない
-      };
-
-      return await this.startDebuggingCommon(workspaceFolder, debugConfig);
-    } catch (error) {
-      if (error instanceof Error) {
-        vscode.window.showErrorMessage(`デバッグ開始エラー: ${error.message}`);
-        console.error("Debug start error:", error);
-      } else {
-        vscode.window.showErrorMessage(
-          "デバッグセッションの開始に失敗しました"
-        );
-        console.error("Unknown debug start error:", error);
-      }
-      return false;
-    }
-  }
-
-  /**
-   * JSON形式のテスト結果ファイルを読み込む
-   */
-  private static async readTestResultsFromFile(
-    filePath: string
-  ): Promise<void> {
-    try {
-      // ファイルが存在しない場合は処理を中断
-      if (!fs.existsSync(filePath)) return;
-
-      const fileContent = fs.readFileSync(filePath, "utf8");
-
-      // ファイルが空の場合は処理を中断
-      if (!fileContent || fileContent.trim() === "") return;
-
-      const jsonData = JSON.parse(fileContent);
-      this.processJsonResults(jsonData);
-      console.log("テスト結果ファイルの読み込みに成功しました");
-    } catch (error) {
-      console.error(`テスト結果ファイル読み込みエラー: ${error}`);
-      throw error;
-    }
   }
 
   /**
@@ -1186,51 +459,103 @@ export class JestDebugger {
   }
 
   /**
-   * 正規表現のために文字列をエスケープする
+   * テストを実行するコマンドを準備
+   * @param targetPath テスト対象のパス
+   * @param isE2ETest E2Eテストかどうか
+   * @param isExcludeSubdirectories サブディレクトリを除外するかどうか
+   * @param testCase テストケース
+   * @returns テスト実行コマンド
    */
-  private static escapeRegExp(string: string): string {
-    // 基本的な正規表現の特殊文字をエスケープ
-    const escapedString = string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // 完全一致のための^と$を追加し、引用符で囲む
-    return `"${escapedString}$"`;
+  public static async createTestCommand(
+    targetPath: string,
+    isE2ETest: boolean = false,
+    isExcludeSubdirectories: boolean = false, // サブディレクトリを除外するかどうか
+    testCase?: TestCase
+  ): Promise<string[]> {
+    try {
+      // コマンドの基本形
+      let command = ["jest"];
+
+      // E2Eテストかどうかで設定ファイルを変更
+      if (isE2ETest) {
+        command.push("--config");
+        command.push("jest.config.e2e.js");
+      } else {
+        command.push("--config");
+        command.push("jest.config.js");
+      }
+
+      // テスト対象のパスを追加
+      if (testCase != null) {
+        command.push("--testPathPattern");
+        if (isExcludeSubdirectories) {
+          // サブディレクトリを除外する場合
+          command.push(`${targetPath}/[^/]+\\.test\\.(ts|js)$`);
+        } else {
+          command.push(targetPath);
+        }
+      } else {
+        // テストケースが指定されている場合は直接ファイルパスを指定
+        command.push(targetPath);
+      }
+
+      // テストケースを指定する場合
+      if (testCase) {
+        command.push("-t");
+        // テストケース名を正規表現の特殊文字に対応するためにエスケープ
+        command.push(this.escapeRegExp(testCase.fullName));
+      }
+
+      // テスト履歴保存用に設定追加
+      command.push("--json");
+
+      return command;
+    } catch (error) {
+      console.error("コマンド生成エラー:", error);
+      throw error;
+    }
   }
 
-  /**
-   * カスタムコマンドでのデバッグセッションを開始
-   */
-  public static async startDebuggingWithCustomCommand(
+  public static async originalStartDebugging(
+    targetPackagePath: string,
     targetPath: string,
-    packageInfo: PackageInfo,
-    command: string,
-    taskName: string
+    isE2ETest: boolean = false,
+    isExcludeSubdirectories: boolean = false,
+    testCase?: TestCase | null
   ): Promise<boolean> {
     try {
       this.clearOutput();
 
+      const absoluteFilePath = path.isAbsolute(targetPath)
+        ? targetPath
+        : path.resolve(targetPackagePath, targetPath);
+
       // ワークスペースフォルダを取得
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(
-        vscode.Uri.file(targetPath)
+        vscode.Uri.file(absoluteFilePath)
       );
       if (!workspaceFolder) {
         throw new Error(
-          `ワークスペースフォルダが見つかりません (${targetPath})`
+          `ワークスペースフォルダが見つかりません (${targetPackagePath})`
         );
       }
 
-      // コマンドをパースして実行可能ファイルと引数に分割
-      const parts = command.split(/\s+/);
-      const executable = parts[0];
-      const args = parts.slice(1);
+      const testCommand = await JestDebugger.createTestCommand(
+        path.join(targetPath),
+        isE2ETest,
+        isExcludeSubdirectories,
+        testCase ?? null
+      );
 
       // デバッグ設定を構築
       const debugConfig: vscode.DebugConfiguration = {
         type: "node",
         request: "launch",
-        name: `Jest Debug: ${taskName}`,
-        runtimeExecutable: executable,
-        runtimeArgs: args,
+        name: `Jest Debug`,
+        runtimeExecutable: "jest",
+        runtimeArgs: testCommand,
         console: "integratedTerminal",
-        cwd: targetPath,
+        cwd: targetPackagePath,
         skipFiles: ["<node_internals>/**"],
         outputCapture: "std",
         internalConsoleOptions: "neverOpen",
@@ -1246,139 +571,6 @@ export class JestDebugger {
           "デバッグセッションの開始に失敗しました"
         );
         console.error("Unknown debug start error:", error);
-      }
-      return false;
-    }
-  }
-
-  /**
-   * ディレクトリ内のテストを実行するコマンドを準備
-   */
-  public static async prepareDirectoryTestCommand(
-    targetDir: string,
-    packageInfo: PackageInfo,
-    isE2ETest: boolean = false,
-    isPackage: boolean = false
-  ): Promise<string> {
-    try {
-      const config = vscode.workspace.getConfiguration("jestTestSelector");
-
-      // 保存されたCLIオプションを取得
-      const savedOptions =
-        config.get<{ [key: string]: any }>("cliOptions") || {};
-      const cliArgs = this.getJestCliArgs(savedOptions);
-
-      // コマンドを構築
-      let command = "npx jest ";
-
-      // ディレクトリパスを追加 これを変更するとサブディレクトリが含まれるので変更禁止
-      if (!isPackage)
-        command += `--testPathPattern='${targetDir}/[^/]+\.test\.(ts|js)$'`;
-
-      // E2Eテストかどうかに基づいて設定ファイルを追加
-      if (isE2ETest) {
-        command += " --config jest.config.e2e.js";
-      } else {
-        command += " --config jest.config.js";
-      }
-
-      // 出力ファイルオプションは既にcliArgsに含まれているため、ここでは追加しない
-
-      // その他のCLIオプションを追加
-      if (cliArgs.length > 0) command += ` ${cliArgs.join(" ")}`;
-
-      return command;
-    } catch (error) {
-      console.error("コマンド準備エラー:", error);
-      throw error;
-    }
-  }
-
-  /**
-   * ディレクトリ内のすべてのテストを実行
-   */
-  public static async startDebuggingDirectoryTests(
-    targetDir: string,
-    packageInfo: PackageInfo,
-    testMode: "unit" | "e2e" | "all"
-  ): Promise<boolean> {
-    try {
-      this.clearOutput();
-
-      // コマンドを準備
-      let command = await this.prepareDirectoryTestCommand(
-        targetDir,
-        packageInfo,
-        testMode === "e2e"
-      );
-
-      // テスト名を生成
-      const dirName = path.basename(targetDir);
-
-      if (testMode === "all") {
-        // allモードの場合、まずユニットテストを実行し、その後E2Eテストを実行
-        const taskName = `${dirName} - ユニットテスト`;
-
-        // デバッグ終了時のイベントリスナーを一時的に登録
-        const disposable = vscode.debug.onDidTerminateDebugSession(
-          async (session) => {
-            if (
-              session.name === `Jest Debug: ${taskName}` &&
-              this.isDebugSessionActive
-            ) {
-              // ユニットテスト終了後、少し待機してからE2Eテスト実行
-              setTimeout(async () => {
-                disposable.dispose(); // リスナーを削除
-
-                // E2Eテスト用のコマンドを準備
-                const e2eCommand = await this.prepareDirectoryTestCommand(
-                  targetDir,
-                  packageInfo,
-                  true
-                );
-
-                // E2Eテストを実行
-                await this.startDebuggingWithCustomCommand(
-                  packageInfo.path,
-                  packageInfo,
-                  e2eCommand,
-                  `${dirName} - E2Eテスト`
-                );
-              }, 1000);
-            }
-          }
-        );
-
-        // まずユニットテストを実行
-        return await this.startDebuggingWithCustomCommand(
-          packageInfo.path,
-          packageInfo,
-          command,
-          taskName
-        );
-      } else {
-        // unit または e2e モードの場合は直接実行
-        const taskName = `${dirName} - ${
-          testMode === "unit" ? "ユニットテスト" : "E2Eテスト"
-        }`;
-        return await this.startDebuggingWithCustomCommand(
-          packageInfo.path,
-          packageInfo,
-          command,
-          taskName
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        vscode.window.showErrorMessage(
-          `ディレクトリテスト開始エラー: ${error.message}`
-        );
-        console.error("Directory test error:", error);
-      } else {
-        vscode.window.showErrorMessage(
-          "ディレクトリテストの開始に失敗しました"
-        );
-        console.error("Unknown directory test error:", error);
       }
       return false;
     }

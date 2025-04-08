@@ -1,12 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import {
-  JestDebugger,
-  TestResultStatus,
-  onTestOutput,
-  onTestSessionEnd,
-} from "./debugger";
+import { JestDebugger, TestResultStatus, onTestOutput } from "./debugger";
 import { TestCase, extractTestCases } from "./testExtractor";
+import { onTestSessionEnd } from "./testResultProcessor";
 
 /**
  * TreeViewに表示するアイテムのタイプ
@@ -26,6 +22,7 @@ export class TestTreeItem extends vscode.TreeItem {
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
     public readonly type: TestItemType,
     public readonly filePath: string,
+    public readonly isTestFile: boolean,
     public readonly testCase?: TestCase
   ) {
     super(label, collapsibleState);
@@ -37,13 +34,49 @@ export class TestTreeItem extends vscode.TreeItem {
         this.contextValue = "packageAllTests";
         break;
       case "file":
-        this.iconPath = new vscode.ThemeIcon("folder"); // ディレクトリのテスト
-        this.tooltip = `ファイル: ${path.basename(filePath)}`;
+        if (isTestFile) {
+          // テストファイルの場合、テスト結果に基づいてアイコンを設定
+          const testStatus = this.checkFileTestStatus();
+          if (testStatus === "success") {
+            // すべてのテストが成功している場合は緑色のチェックマーク
+            this.iconPath = new vscode.ThemeIcon(
+              "check",
+              new vscode.ThemeColor("testing.iconPassed")
+            );
+            this.tooltip = `ファイル: ${path.basename(
+              filePath
+            )} [すべてのテスト成功]`;
+          } else if (testStatus === "failure") {
+            // 失敗したテストがある場合は赤色のバツ印
+            this.iconPath = new vscode.ThemeIcon(
+              "error",
+              new vscode.ThemeColor("testing.iconFailed")
+            );
+            this.tooltip = `ファイル: ${path.basename(
+              filePath
+            )} [テスト失敗あり]`;
+          } else {
+            // それ以外の場合は通常のフォルダアイコン
+            this.iconPath = new vscode.ThemeIcon("folder");
+            this.tooltip = `ファイル: ${path.basename(filePath)}`;
+          }
+        } else {
+          // テストファイルでない場合は通常のフォルダアイコン
+          this.iconPath = new vscode.ThemeIcon("folder");
+          this.tooltip = `ファイル: ${path.basename(filePath)}`;
+        }
+
         this.description = path.relative(
           vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "",
           filePath
         );
-        this.contextValue = "testFile";
+
+        // ファイルノードはテストファイルの場合、実行可能なコンテキスト値を設定
+        if (isTestFile) {
+          this.contextValue = "runnableTestFile";
+        } else {
+          this.contextValue = "testFile";
+        }
         break;
       case "describe":
         this.iconPath = new vscode.ThemeIcon("beaker");
@@ -87,6 +120,16 @@ export class TestTreeItem extends vscode.TreeItem {
           };
         }
         break;
+    }
+
+    // ファイルノードまたはdescribeノード（ファイルを表す場合）であり、
+    // かつテストファイルの場合に実行用コンテキストを追加
+    if ((type === "file" || type === "describe") && isTestFile) {
+      // 既存のコンテキスト値にスペース区切りで追加
+      const runnableContext = "runnableTestFile";
+      this.contextValue = this.contextValue
+        ? `${this.contextValue} ${runnableContext}`
+        : runnableContext;
     }
 
     // 現在アクティブなエディタのファイルパスを取得
@@ -213,18 +256,71 @@ export class TestTreeItem extends vscode.TreeItem {
         this.tooltip = `${this.tooltip} [実行中]`;
         break;
       case TestResultStatus.Pending:
-        // 保留中の場合は黄色のクロックアイコン
-        this.iconPath = new vscode.ThemeIcon(
-          "history",
-          new vscode.ThemeColor("testing.iconSkipped")
-        );
-        this.tooltip = `${this.tooltip} [保留中]`;
+        // Pending状態の場合もデフォルトのアイコンを使用
+        this.iconPath = new vscode.ThemeIcon("symbol-method");
+        this.tooltip = `${this.tooltip}`;
         break;
       default:
         // その他の場合はデフォルトのアイコン
         this.iconPath = new vscode.ThemeIcon("symbol-method");
         break;
     }
+  }
+
+  /**
+   * ファイル内のテスト結果のステータスをチェック
+   * @returns "success" - すべてのテストが成功, "failure" - 失敗したテストあり, "unknown" - テスト結果なし
+   */
+  private checkFileTestStatus(): "success" | "failure" | "unknown" {
+    try {
+      // ファイルパスが有効であることを確認
+      if (!this.filePath || !this.isTestFile) {
+        return "unknown";
+      }
+
+      // テスト結果を取得
+      const allResults = JestDebugger.getAllTestResults();
+      if (allResults.size === 0) {
+        return "unknown"; // テスト結果がない場合
+      }
+
+      // このファイルに関連するテスト結果を抽出
+      const fileBaseName = path.basename(this.filePath);
+      let hasAnyTests = false;
+      let hasFailedTests = false;
+
+      for (const [key, result] of allResults.entries()) {
+        // このファイルに関連するテスト結果のみを処理
+        if (key.includes(this.filePath) || key.includes(fileBaseName)) {
+          hasAnyTests = true;
+
+          // 失敗したテストがあるかをチェック
+          if (result.status === TestResultStatus.Failure) {
+            hasFailedTests = true;
+            break; // 1つでも失敗したテストがあれば処理終了
+          }
+        }
+      }
+
+      // テスト結果が見つからない場合
+      if (!hasAnyTests) {
+        return "unknown";
+      }
+
+      // 失敗したテストがある場合は failure、なければ success
+      return hasFailedTests ? "failure" : "success";
+    } catch (error) {
+      console.error("テスト結果チェック中にエラーが発生:", error);
+      return "unknown";
+    }
+  }
+
+  /**
+   * ファイル内のすべてのテストが成功しているかをチェック
+   * @returns すべてのテストが成功している場合はtrue、それ以外はfalse
+   */
+  private checkAllTestsSucceeded(): boolean {
+    return this.checkFileTestStatus() === "success";
   }
 }
 
@@ -296,7 +392,11 @@ export class TestTreeDataProvider
     this.disposables.push(
       onTestSessionEnd(() => {
         // テストセッションが終了したらツリービューを更新
-        this._onDidChangeTreeData.fire();
+        console.log("テストセッション終了を検知、ツリービューを更新します");
+        // 少し遅延させて最新のテスト結果が反映されるようにする
+        setTimeout(() => {
+          this._onDidChangeTreeData.fire();
+        }, 100);
       })
     );
 
@@ -450,28 +550,11 @@ export class TestTreeDataProvider
         // ファイルノードを作成
         const fileNode: TestNode = {
           name: fileName,
-          type: "describe",
+          type: "file",
           filePath: testFile,
           children: [],
         };
         directoryNode.children.push(fileNode);
-
-        // すべてのテストを実行するノードを追加
-        const allTestsNode: TestNode = {
-          name: "All Tests",
-          type: "testCase",
-          filePath: testFile,
-          children: [],
-          testCase: {
-            name: "All Tests",
-            fullName: "All Tests",
-            describePath: [],
-            lineNumber: 0,
-            isAllTests: true,
-            hasOnly: hasOnlyInFile, // ファイル内にonly付きのテストがある場合はtrueを設定
-          },
-        };
-        fileNode.children.push(allTestsNode);
 
         // 各テストケースをツリーに追加
         for (const testCase of testCases) {
@@ -701,24 +784,11 @@ export class TestTreeDataProvider
 
       // workspaceNodeを保持し、ファイルノードを追加
       const workspaceNode = this.rootNodes[0]; // ワークスペース全体のテストを実行ノード
-      this.rootNodes = [workspaceNode, fileNode];
-
-      // すべてのテストを実行するノード
-      const allTestsNode: TestNode = {
-        name: "All Tests",
-        type: "testCase",
-        filePath,
-        children: [],
-        testCase: {
-          name: "All Tests",
-          fullName: "All Tests",
-          describePath: [],
-          lineNumber: 0,
-          isAllTests: true,
-          hasOnly: hasOnlyInFile, // ファイル内にonly付きのテストがある場合はtrueを設定
-        },
-      };
-      fileNode.children.push(allTestsNode);
+      if (workspaceNode && workspaceNode.type === "packageAllTests") {
+        this.rootNodes = [workspaceNode, fileNode];
+      } else {
+        this.rootNodes = [fileNode]; // ファイルノードのみ
+      }
 
       // extractParamsプレフィックスを持つファイルは特別扱い
       const isExtractParamsFile =
@@ -806,6 +876,7 @@ export class TestTreeDataProvider
             : vscode.TreeItemCollapsibleState.None,
           node.type,
           node.filePath,
+          this.isTestFile(node.filePath),
           node.testCase
         );
       });
@@ -851,6 +922,7 @@ export class TestTreeDataProvider
           collapsibleState,
           child.type,
           child.filePath,
+          this.isTestFile(child.filePath),
           child.testCase
         );
       })

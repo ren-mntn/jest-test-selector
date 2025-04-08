@@ -57,100 +57,71 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
       // パッケージ全体のテストを実行するケース
       if (runBoth) {
         // 両方（Unit + E2E）実行する場合
-        // 通知を削除
-
-        // カスタムコマンドを構築
-        const testCmd = await JestDebugger.prepareDirectoryTestCommand(
-          path.join(targetPackage.path, "src"),
-          targetPackage,
-          false,
-          true
-        );
-
         // 実行
-        success = await JestDebugger.startDebuggingWithCustomCommand(
+        success = await JestDebugger.originalStartDebugging(
           targetPackage.path,
-          targetPackage,
-          testCmd,
-          `全てのテスト: ${targetPackage.name}`
+          targetPackage.path,
+          false,
+          false
         );
       } else if (unitTestOnly) {
-        // ユニットテストのみ実行
-        // 通知を削除
-
-        // カスタムコマンドを構築
-        const testCmd = await JestDebugger.prepareDirectoryTestCommand(
-          path.join(targetPackage.path, "src"),
-          targetPackage,
-          false,
-          true
-        );
-
         // 実行
-        success = await JestDebugger.startDebuggingWithCustomCommand(
+        success = await JestDebugger.originalStartDebugging(
           targetPackage.path,
-          targetPackage,
-          testCmd,
-          `ユニットテスト: ${targetPackage.name}`
+          targetPackage.path,
+          false,
+          false
         );
       } else if (e2eTestOnly) {
-        // E2Eテストのみ実行
-        // 通知を削除
-
-        // カスタムコマンドを構築
-        const testCmd = await JestDebugger.prepareDirectoryTestCommand(
-          path.join(targetPackage.path, "src"),
-          targetPackage,
-          true,
-          true
-        );
-
         // 実行
-        success = await JestDebugger.startDebuggingWithCustomCommand(
+        success = await JestDebugger.originalStartDebugging(
           targetPackage.path,
-          targetPackage,
-          testCmd,
-          `E2Eテスト: ${targetPackage.name}`
+          targetPackage.path,
+          false,
+          true
         );
       }
     } else if (scope === "directory") {
       // ディレクトリに対するテスト実行
+      console.log(`ディレクトリに対するテスト実行: ${targetPath}`);
       if (e2eTestOnly) {
-        // 通知を削除
-        success = await JestDebugger.startDebuggingDirectoryTests(
+        success = await JestDebugger.originalStartDebugging(
+          targetPackage.path,
           targetPath,
-          targetPackage,
-          "e2e"
+          true,
+          true
         );
       } else if (unitTestOnly) {
-        // 通知を削除
-        success = await JestDebugger.startDebuggingDirectoryTests(
-          targetPath,
-          targetPackage,
-          "unit"
+        success = await JestDebugger.originalStartDebugging(
+          targetPackage.path,
+          path.join(targetPath),
+          true,
+          false
         );
       } else {
-        // 通知を削除
-        success = await JestDebugger.startDebuggingDirectoryTests(
-          targetPath,
-          targetPackage,
-          "all"
+        success = await JestDebugger.originalStartDebugging(
+          targetPackage.path,
+          path.join(targetPath),
+          true,
+          true
         );
       }
     } else if (scope === "file") {
       // ファイルに対するテスト実行
       if (testCase) {
-        // 通知を削除
-        success = await JestDebugger.startDebugging(
+        success = await JestDebugger.originalStartDebugging(
+          targetPackage.path,
           targetPath,
-          testCase,
-          targetPackage
+          targetPath.endsWith(".e2e.test.ts"),
+          false,
+          testCase
         );
       } else {
-        // 通知を削除
-        success = await JestDebugger.startDebuggingAllTests(
+        success = await JestDebugger.originalStartDebugging(
+          targetPackage.path,
           targetPath,
-          targetPackage
+          targetPath.endsWith(".e2e.test.ts"),
+          true
         );
       }
     } else if (scope === "test") {
@@ -158,11 +129,12 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
       if (!testCase) {
         throw new Error("テストケースが指定されていません");
       }
-      // 通知を削除
-      success = await JestDebugger.startDebugging(
+      success = await JestDebugger.originalStartDebugging(
+        targetPackage.path,
         targetPath,
-        testCase,
-        targetPackage
+        targetPath.endsWith(".e2e.test.ts"),
+        false,
+        testCase
       );
     }
 
@@ -182,155 +154,6 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
     return false;
   }
 };
-
-/**
- * テストファイル全体を実行する
- * @param filePath テストファイルのパス
- * @param describeBlock 実行するdescribeブロック名（オプション）
- */
-export async function runTestFile(
-  filePath: string,
-  describeBlock?: string
-): Promise<void> {
-  try {
-    console.log(`Running test file: ${filePath}`);
-    // 絶対パスに変換
-    const absoluteFilePath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(
-          vscode.workspace.workspaceFolders?.[0].uri.fsPath || "",
-          filePath
-        );
-    console.log(`Absolute file path: ${absoluteFilePath}`);
-
-    // ワークスペースフォルダを取得
-    const workspaceFolder = vscode.workspace.getWorkspaceFolder(
-      vscode.Uri.file(absoluteFilePath)
-    );
-    if (!workspaceFolder) {
-      throw new Error(
-        `ワークスペースフォルダが見つかりません (${absoluteFilePath})`
-      );
-    }
-    console.log(`Workspace folder: ${workspaceFolder.uri.fsPath}`);
-
-    // パッケージ構造を検出
-    const packages = await detectMonorepoPackages(workspaceFolder.uri.fsPath);
-    const targetPackage = findPackageForPath(
-      absoluteFilePath,
-      workspaceFolder,
-      packages
-    );
-
-    if (!targetPackage) {
-      vscode.window.showErrorMessage(
-        "テスト実行対象のパッケージが見つかりません"
-      );
-      return;
-    }
-    console.log(`Target package: ${targetPackage.name}, ${targetPackage.path}`);
-
-    // ファイル名を取得（表示用）
-    const fileName = path.basename(absoluteFilePath);
-    console.log(`File name: ${fileName}`);
-
-    // テスト実行（常に絶対パスを使用）
-    if (describeBlock) {
-      // describeブロックを指定して実行
-      const mockTestCase: TestCase = {
-        name: describeBlock,
-        fullName: describeBlock,
-        describePath: [],
-        lineNumber: 0,
-      };
-      console.log(`指定のdescribeブロックで実行: ${describeBlock}`);
-      await JestDebugger.startDebugging(
-        absoluteFilePath,
-        mockTestCase,
-        targetPackage
-      );
-    } else {
-      // ファイル全体を実行
-      console.log(`ファイル全体を実行: ${fileName}`);
-      await JestDebugger.startDebuggingAllTests(
-        absoluteFilePath,
-        targetPackage
-      );
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      vscode.window.showErrorMessage(`エラー: ${error.message}`);
-      console.error("Run test file error:", error);
-    } else {
-      vscode.window.showErrorMessage("予期しないエラーが発生しました");
-      console.error("Unknown error in run test file:", error);
-    }
-  }
-}
-
-/**
- * 特定のテストケースを実行
- * @param filePath テストファイルのパス
- * @param testCase 実行するテストケース
- */
-export async function runSpecificTest(
-  filePath: string,
-  testCase: TestCase
-): Promise<void> {
-  try {
-    console.log(`Running specific test: ${filePath}, test: ${testCase.name}`);
-    // 絶対パスに変換
-    const absoluteFilePath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(
-          vscode.workspace.workspaceFolders?.[0].uri.fsPath || "",
-          filePath
-        );
-    console.log(`Absolute file path: ${absoluteFilePath}`);
-
-    // ワークスペースフォルダを取得
-    const workspaceFolder = vscode.workspace.getWorkspaceFolder(
-      vscode.Uri.file(absoluteFilePath)
-    );
-    if (!workspaceFolder) {
-      throw new Error(
-        `ワークスペースフォルダが見つかりません (${absoluteFilePath})`
-      );
-    }
-    console.log(`Workspace folder: ${workspaceFolder.uri.fsPath}`);
-
-    // パッケージ構造を検出
-    const packages = await detectMonorepoPackages(workspaceFolder.uri.fsPath);
-    const targetPackage = findPackageForPath(
-      absoluteFilePath,
-      workspaceFolder,
-      packages
-    );
-
-    if (!targetPackage) {
-      vscode.window.showErrorMessage(
-        "テスト実行対象のパッケージが見つかりません"
-      );
-      return;
-    }
-    console.log(`Target package: ${targetPackage.name}, ${targetPackage.path}`);
-
-    // テスト実行（常に絶対パスを使用）
-    await JestDebugger.startDebugging(
-      absoluteFilePath,
-      testCase,
-      targetPackage
-    );
-  } catch (error) {
-    if (error instanceof Error) {
-      vscode.window.showErrorMessage(`エラー: ${error.message}`);
-      console.error("Run specific test error:", error);
-    } else {
-      vscode.window.showErrorMessage("予期しないエラーが発生しました");
-      console.error("Unknown error in run specific test:", error);
-    }
-  }
-}
 
 /**
  * 純粋関数: ターゲットパッケージの特定
