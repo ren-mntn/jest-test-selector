@@ -1,19 +1,34 @@
 import * as vscode from "vscode";
-import { JestDebugger } from "./debugger";
-import { registerOnlyDetectionFeatures } from "./onlyDetector";
+import { onlyDetector, registerOnlyDetectionFeatures } from "./onlyDetector";
 import { extractTestCases } from "./testExtractor";
+import * as testResultProcessor from "./testResultProcessor2";
 import { runTestsAtScope, TestScope } from "./testRunner";
 import { TestSettingsProvider } from "./testSettingsView";
 import { TestTreeDataProvider, TestTreeItem } from "./testTreeDataProvider";
+import { isTestFile } from "./testUtils";
 
 // 拡張機能が有効化されたときに実行される関数
-export function activate(context: vscode.ExtensionContext) {
-  console.log('拡張機能 "jest-test-selector" が有効化されました');
-  console.log(`拡張機能ID: ${context.extension.id}`);
+export async function activate(context: vscode.ExtensionContext) {
+  const activationStartTime = Date.now();
+  console.log("Jest Test Selector 拡張機能を有効化開始...");
 
-  // 起動時に過去のテスト結果履歴を読み込む
-  JestDebugger.loadHistoryFile();
-  console.log("テスト結果履歴の読み込みが完了しました");
+  console.log("Jest Test Selector 拡張機能を有効化: V2");
+
+  // テスト結果プロセッサを初期化
+  const initStartTime = Date.now();
+  testResultProcessor
+    .initialize(context)
+    .then(() => {
+      const initEndTime = Date.now();
+      console.log(
+        `TestResultProcessor2 の初期化が完了しました (${
+          initEndTime - initStartTime
+        }ms)`
+      );
+    })
+    .catch((error) => {
+      console.error("TestResultProcessor2 の初期化に失敗:", error);
+    });
 
   // カバレッジステータス表示用のステータスバーアイテム
   const coverageStatusBarItem = vscode.window.createStatusBarItem(
@@ -32,6 +47,57 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(coverageStatusBarItem);
 
+  // ターミナル実行モード用のステータスバーアイテム
+  const terminalModeStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    101
+  );
+  terminalModeStatusBarItem.text = "$(terminal) ターミナル実行";
+  terminalModeStatusBarItem.tooltip =
+    "ターミナルでテストを実行します。クリックで切り替え";
+  terminalModeStatusBarItem.command = "jestTestSelector.toggleTerminalMode";
+  context.subscriptions.push(terminalModeStatusBarItem);
+
+  // デフォルトでは非表示に設定
+  terminalModeStatusBarItem.hide();
+
+  // ターミナル実行フラグを管理するグローバル変数
+  let useTerminalMode = false;
+
+  // ターミナルモード切り替えコマンドを登録
+  const toggleTerminalModeDisposable = vscode.commands.registerCommand(
+    "jestTestSelector.toggleTerminalMode",
+    async () => {
+      useTerminalMode = !useTerminalMode;
+      if (useTerminalMode) {
+        terminalModeStatusBarItem.text = "$(terminal) ターミナル実行: 有効";
+        terminalModeStatusBarItem.backgroundColor = new vscode.ThemeColor(
+          "statusBarItem.warningBackground"
+        );
+        vscode.window.showInformationMessage(
+          "ターミナルでのテスト実行モードが有効になりました"
+        );
+      } else {
+        terminalModeStatusBarItem.text = "$(terminal) ターミナル実行";
+        terminalModeStatusBarItem.backgroundColor = undefined;
+        vscode.window.showInformationMessage(
+          "通常のデバッグモードでのテスト実行に戻りました"
+        );
+      }
+      terminalModeStatusBarItem.show();
+    }
+  );
+  context.subscriptions.push(toggleTerminalModeDisposable);
+
+  // ターミナル実行モード表示コマンドを登録
+  const showTerminalModeDisposable = vscode.commands.registerCommand(
+    "jestTestSelector.showTerminalMode",
+    async () => {
+      terminalModeStatusBarItem.show();
+    }
+  );
+  context.subscriptions.push(showTerminalModeDisposable);
+
   // カバレッジ設定の初期状態をチェックしてステータスバーを更新
   (async () => {
     const config = vscode.workspace.getConfiguration("jestTestSelector");
@@ -44,11 +110,15 @@ export function activate(context: vscode.ExtensionContext) {
     } else {
       coverageStatusBarItem.hide();
     }
+
+    // ターミナルモードのステータスバーも表示
+    terminalModeStatusBarItem.show();
   })();
 
   // 拡張機能が既に有効化されているかチェック
   try {
     // テスト設定ビュープロバイダーを登録
+    const settingsViewStartTime = Date.now();
     const testSettingsProvider = TestSettingsProvider.getInstance(
       context.extensionUri
     );
@@ -65,12 +135,18 @@ export function activate(context: vscode.ExtensionContext) {
             },
           }
         );
-      console.log("テスト設定ビュープロバイダーを登録しました");
+      const settingsViewEndTime = Date.now();
+      console.log(
+        `テスト設定ビュープロバイダーを登録しました (${
+          settingsViewEndTime - settingsViewStartTime
+        }ms)`
+      );
     } catch (e) {
       console.log("テスト設定ビュープロバイダーは既に登録されています");
     }
 
     // テストツリービューデータプロバイダーを作成
+    const treeViewStartTime = Date.now();
     const testTreeDataProvider = new TestTreeDataProvider();
     const testTreeView = vscode.window.createTreeView(
       "jestTestSelector.testExplorer",
@@ -81,59 +157,25 @@ export function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(testTreeView);
     context.subscriptions.push(testTreeDataProvider);
-
-    // .only関連機能を登録（onlyDetector.tsを使用）
-    registerOnlyDetectionFeatures(
-      context,
-      () => testTreeDataProvider.getOnlyLocations(),
-      () => testTreeDataProvider.getHasDetectedOnly(),
-      testTreeDataProvider.onDidDetectOnly,
-      extractTestCases
+    const treeViewEndTime = Date.now();
+    console.log(
+      `テストツリービューデータプロバイダーを作成しました (${
+        treeViewEndTime - treeViewStartTime
+      }ms)`
     );
 
-    // Jest CLI オプションタブを開くコマンドを登録
-    const selectJestOptionsDisposable = vscode.commands.registerCommand(
-      "jestTestSelector.selectOptions",
-      async () => {
-        try {
-          console.log("セレクトオプションコマンドが実行されました");
-
-          // 設定ビューを表示
-          const testSettingsProvider = TestSettingsProvider.getInstance(
-            context.extensionUri
-          );
-
-          try {
-            // Jest Test Selector拡張機能のビューを表示
-            await vscode.commands.executeCommand(
-              "workbench.view.extension.jest-test-selector"
-            );
-
-            // 少し待機してからテスト設定タブに切り替え
-            setTimeout(async () => {
-              try {
-                await vscode.commands.executeCommand(
-                  TestSettingsProvider.viewType + ".focus"
-                );
-                console.log("テスト設定タブのフォーカスコマンドを実行しました");
-              } catch (error) {
-                console.error("テスト設定タブのフォーカスに失敗:", error);
-              }
-            }, 500);
-          } catch (error) {
-            console.error("WebViewタブ表示に失敗:", error);
-          }
-        } catch (error) {
-          console.error("コマンド実行エラー:", error);
-          vscode.window.showErrorMessage(
-            `テスト設定の表示に失敗しました: ${error}`
-          );
-        }
-      }
+    // .only関連機能を登録（onlyDetector.tsを使用）
+    const onlyDetectorStartTime = Date.now();
+    registerOnlyDetectionFeatures(context, extractTestCases);
+    const onlyDetectorEndTime = Date.now();
+    console.log(
+      `.only関連機能を登録しました (${
+        onlyDetectorEndTime - onlyDetectorStartTime
+      }ms)`
     );
 
     // 登録したコマンドを追加
-    const disposables: vscode.Disposable[] = [selectJestOptionsDisposable];
+    const disposables: vscode.Disposable[] = [];
 
     // 設定エディタを開くコマンドを登録
     const openSettingsDisposable = vscode.commands.registerCommand(
@@ -154,6 +196,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
     );
     disposables.push(openSettingsDisposable);
+
+    // テスト設定プロバイダーを追加
+    if (testSettingsProviderDisposable) {
+      disposables.push(testSettingsProviderDisposable);
+      context.subscriptions.push(testSettingsProviderDisposable);
+    }
 
     // テストリストを更新するコマンドを登録
     const refreshTestsDisposable = vscode.commands.registerCommand(
@@ -178,7 +226,9 @@ export function activate(context: vscode.ExtensionContext) {
           item.filePath,
           undefined,
           false,
-          false
+          false,
+          false,
+          useTerminalMode
         );
       }
     );
@@ -197,7 +247,10 @@ export function activate(context: vscode.ExtensionContext) {
           "directory" as TestScope,
           item.filePath,
           undefined,
-          true
+          true,
+          false,
+          false,
+          useTerminalMode
         );
       }
     );
@@ -217,7 +270,9 @@ export function activate(context: vscode.ExtensionContext) {
           item.filePath,
           undefined,
           false,
-          true
+          true,
+          false,
+          useTerminalMode
         );
       }
     );
@@ -237,7 +292,9 @@ export function activate(context: vscode.ExtensionContext) {
           item.filePath,
           undefined,
           true,
-          false
+          false,
+          false,
+          useTerminalMode
         );
       }
     );
@@ -257,7 +314,9 @@ export function activate(context: vscode.ExtensionContext) {
           item.filePath,
           undefined,
           false,
-          true
+          true,
+          false,
+          useTerminalMode
         );
       }
     );
@@ -278,7 +337,8 @@ export function activate(context: vscode.ExtensionContext) {
           undefined,
           false,
           false,
-          true
+          true,
+          useTerminalMode
         );
       }
     );
@@ -293,7 +353,15 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        await runTestsAtScope("file" as TestScope, item.filePath);
+        await runTestsAtScope(
+          "file" as TestScope,
+          item.filePath,
+          undefined,
+          false,
+          false,
+          false,
+          useTerminalMode
+        );
       }
     );
     disposables.push(runFileAllTestsDisposable);
@@ -311,7 +379,11 @@ export function activate(context: vscode.ExtensionContext) {
           await runTestsAtScope(
             "file" as TestScope,
             item.filePath,
-            item.testCase
+            item.testCase,
+            false,
+            false,
+            false,
+            useTerminalMode
           );
         } catch (error) {
           if (error instanceof Error) {
@@ -329,10 +401,7 @@ export function activate(context: vscode.ExtensionContext) {
     // エディタ変更時に自動的にテストツリーを更新
     const activeEditorChangeDisposable =
       vscode.window.onDidChangeActiveTextEditor(async (editor) => {
-        if (
-          editor &&
-          testTreeDataProvider.isTestFile(editor.document.uri.fsPath)
-        ) {
+        if (editor && isTestFile(editor.document.uri.fsPath)) {
           await testTreeDataProvider.refresh();
         }
       });
@@ -340,10 +409,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // 現在のエディタが存在し、テストファイルであれば初期表示を実行
     const currentEditor = vscode.window.activeTextEditor;
-    if (
-      currentEditor &&
-      testTreeDataProvider.isTestFile(currentEditor.document.uri.fsPath)
-    ) {
+    if (currentEditor && isTestFile(currentEditor.document.uri.fsPath)) {
       testTreeDataProvider.refresh();
     }
 
@@ -359,8 +425,10 @@ export function activate(context: vscode.ExtensionContext) {
     disposables.push(textChangeDisposable);
 
     // .only検出イベントが発生したときにデコレーションを更新
-    const onlyDetectDisposable = testTreeDataProvider.onDidDetectOnly(() => {
-      // updateOnlyDecorations();
+    const onlyDetectDisposable = onlyDetector.onDidDetectOnly((hasOnly) => {
+      if (hasOnly) {
+        testTreeDataProvider.refresh();
+      }
     });
     disposables.push(onlyDetectDisposable);
 
@@ -377,9 +445,17 @@ export function activate(context: vscode.ExtensionContext) {
       `Jest Test Selector拡張機能の初期化に失敗しました: ${error}`
     );
   }
+
+  const activationEndTime = Date.now();
+  console.log(
+    `Jest Test Selector 拡張機能の有効化完了 (${
+      activationEndTime - activationStartTime
+    }ms)`
+  );
 }
 
 // 拡張機能が無効化されたときに実行される関数
 export function deactivate() {
-  console.log('拡張機能 "jest-test-selector" が無効化されました');
+  console.log("Jest Test Selector 拡張機能を無効化");
+  // クリーンアップロジック（必要であれば）
 }

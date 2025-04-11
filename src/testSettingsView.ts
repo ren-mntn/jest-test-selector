@@ -1,380 +1,297 @@
 import * as vscode from "vscode";
 
-/**
- * テスト設定ビューのプロバイダークラス
- */
-export class TestSettingsProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "jestTestSelector.testSettings";
-  private _view?: vscode.WebviewView;
-  private static _instance: TestSettingsProvider;
-  private _fileWatcher?: vscode.FileSystemWatcher;
+// 型定義
+type JestOption = {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly value: boolean;
+};
 
-  // シングルトンインスタンスを取得
-  public static getInstance(extensionUri: vscode.Uri): TestSettingsProvider {
-    if (!TestSettingsProvider._instance) {
-      TestSettingsProvider._instance = new TestSettingsProvider(extensionUri);
-    }
-    return TestSettingsProvider._instance;
-  }
+type OptionCategory = {
+  readonly title: string;
+  readonly options: readonly string[];
+};
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+type OptionsMap = Readonly<Record<string, boolean>>;
 
-  /**
-   * 設定を更新する
-   */
-  public updateView(): void {
-    if (this._view) {
-      this._view.webview.html = this.getWebviewContent();
-    }
-  }
+// 現在の設定からJestオプションを構築
+const createJestOptions = (
+  currentOptions: OptionsMap
+): readonly JestOption[] => [
+  {
+    id: "--watch",
+    label: "ウォッチモード",
+    description: "ファイルの変更を監視し、関連するテストを自動で再実行します",
+    value: !!currentOptions["--watch"],
+  },
+  {
+    id: "--watchAll",
+    label: "すべてをウォッチ",
+    description: "ファイルの変更を監視し、すべてのテストを自動で再実行します",
+    value: !!currentOptions["--watchAll"],
+  },
+  {
+    id: "--coverage",
+    label: "カバレッジ",
+    description: "コードカバレッジレポートを生成します",
+    value: !!currentOptions["--coverage"],
+  },
+  {
+    id: "--verbose",
+    label: "バーボース",
+    description:
+      "各テストごとの結果をテストスイートの階層構造とともに表示します。",
+    value: currentOptions["--verbose"] !== false, // デフォルトでtrue
+  },
+  {
+    id: "--colors",
+    label: "カラー出力",
+    description: "色付きの出力を使用します",
+    value: currentOptions["--colors"] !== false, // デフォルトでtrue
+  },
+  {
+    id: "--bail",
+    label: "失敗時に停止",
+    description: "テストが失敗したら実行を中止します",
+    value: !!currentOptions["--bail"],
+  },
+  {
+    id: "--updateSnapshot",
+    label: "スナップショット更新 (-u)",
+    description: "失敗したスナップショットテストを更新します",
+    value: !!currentOptions["--updateSnapshot"],
+  },
+  {
+    id: "--onlyChanged",
+    label: "変更されたファイルのみ (-o)",
+    description: "git/hgで変更されたファイルに関連するテストのみを実行します",
+    value: !!currentOptions["--onlyChanged"],
+  },
+  {
+    id: "--runInBand",
+    label: "シリアル実行 (-i)",
+    description: "テストを並列ではなく1つずつ実行します（デバッグに便利）",
+    value: !!currentOptions["--runInBand"],
+  },
+  {
+    id: "--detectOpenHandles",
+    label: "オープンハンドル検出",
+    description:
+      "完了しないPromiseやタイマーなどの開いたままのハンドルを検出します",
+    value: !!currentOptions["--detectOpenHandles"],
+  },
+  {
+    id: "--ci",
+    label: "CI環境モード",
+    description: "CI環境に最適化された設定で実行します",
+    value: !!currentOptions["--ci"],
+  },
+  {
+    id: "--silent",
+    label: "サイレントモード",
+    description: "コンソールへの出力を最小限にします",
+    value: !!currentOptions["--silent"],
+  },
+  {
+    id: "--forceExit",
+    label: "強制終了",
+    description: "テスト完了後に強制的にJestを終了します",
+    value: !!currentOptions["--forceExit"],
+  },
+  {
+    id: "--noStackTrace",
+    label: "スタックトレース無効",
+    description: "エラー時のスタックトレースを非表示にします",
+    value: !!currentOptions["--noStackTrace"],
+  },
+  {
+    id: "--passWithNoTests",
+    label: "テスト無しでもパス",
+    description: "テストが見つからなくてもエラーにしません",
+    value: !!currentOptions["--passWithNoTests"],
+  },
+  {
+    id: "--runTestsByPath",
+    label: "パスでテスト実行",
+    description:
+      "正規表現マッチングではなくファイルパスに基づいてテストを実行します",
+    value: !!currentOptions["--runTestsByPath"],
+  },
+  {
+    id: "--expand",
+    label: "差分を展開",
+    description: "テスト失敗時に差分を完全に展開して表示します",
+    value: !!currentOptions["--expand"],
+  },
+  {
+    id: "--useStderr",
+    label: "標準エラー出力に出力",
+    description: "全ての出力を標準エラー出力に出力します",
+    value: !!currentOptions["--useStderr"],
+  },
+  {
+    id: "--no-cache",
+    label: "キャッシュを使用しない",
+    description:
+      "注意: キャッシュの無効化はキャッシュに関連した問題が発生した場合のみ行って下さい。 概して、キャッシュの無効化によりJestの実行時間は2倍になります。",
+    value: !!currentOptions["--no-cache"],
+  },
+  {
+    id: "--debug",
+    label: "デバッグモード",
+    description: "デバッグ情報を出力します",
+    value: !!currentOptions["--debug"],
+  },
+  {
+    id: "--errorOnDeprecated",
+    label: "非推奨機能でエラー",
+    description: "非推奨のAPIが使用された場合にエラーを発生させます",
+    value: !!currentOptions["--errorOnDeprecated"],
+  },
+  {
+    id: "--notify",
+    label: "通知",
+    description:
+      "テスト完了時にOSの通知を表示します（要node-notifierパッケージ）",
+    value: !!currentOptions["--notify"],
+  },
+  {
+    id: "--watchman",
+    label: "Watchmanを使用",
+    description: "ファイル監視にWatchmanを使用します（デフォルトはtrue）",
+    value: currentOptions["--watchman"] !== false, // デフォルトでtrue
+  },
+  {
+    id: "--onlyFailures",
+    label: "失敗したテストのみ (-f)",
+    description: "前回失敗したテストのみを実行します",
+    value: !!currentOptions["--onlyFailures"],
+  },
+];
 
-  /**
-   * WebViewを解決
-   */
-  public resolveWebviewView(
-    webviewView: vscode.WebviewView,
-    context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken
-  ) {
-    console.log("TestSettingsProvider.resolveWebviewView called");
+// オプションのカテゴリを定義
+const getOptionCategories = (): readonly OptionCategory[] => [
+  {
+    title: "実行モード",
+    options: [
+      "--watch",
+      "--watchAll",
+      "--onlyChanged",
+      "--runInBand",
+      "--ci",
+      "--passWithNoTests",
+      "--runTestsByPath",
+      "--onlyFailures",
+    ],
+  },
+  {
+    title: "出力設定",
+    options: [
+      "--verbose",
+      "--colors",
+      "--silent",
+      "--noStackTrace",
+      "--expand",
+      "--json",
+      "--useStderr",
+    ],
+  },
+  {
+    title: "テスト動作",
+    options: [
+      "--bail",
+      "--coverage",
+      "--updateSnapshot",
+      "--detectOpenHandles",
+      "--forceExit",
+      "--debug",
+      "--errorOnDeprecated",
+    ],
+  },
+  {
+    title: "その他",
+    options: ["--no-cache", "--notify", "--watchman"],
+  },
+];
 
-    this._view = webviewView;
+// オプションアイテムのHTMLを生成
+const createOptionItemHtml = (option: JestOption): string => `
+  <div class="option-item">
+    <div class="option-header" title="${option.description}">
+      <input type="checkbox" id="${option.id}" class="checkbox" ${
+  option.value ? "checked" : ""
+}>
+      <label for="${option.id}" class="option-label">${option.label}</label>
+    </div>
+  </div>
+`;
 
-    // Webviewの設定
-    webviewView.webview.options = {
-      enableScripts: true, // スクリプト有効化
-      localResourceRoots: [this._extensionUri],
-    };
+// カテゴリのHTMLを生成
+const createCategoryHtml = (
+  category: OptionCategory,
+  jestOptions: readonly JestOption[]
+): string => {
+  const optionsHtml = category.options
+    .map((optionId) => jestOptions.find((opt) => opt.id === optionId))
+    .filter((option): option is JestOption => option !== undefined)
+    .map(createOptionItemHtml)
+    .join("");
 
-    // CSPで許可するリソースを設定
-    const nonce = this.getNonce();
+  return `
+    <div class="option-category">
+      <h4 class="category-title">${category.title}</h4>
+      <div class="category-items">
+        ${optionsHtml}
+      </div>
+    </div>
+  `;
+};
 
-    // HTMLコンテンツを設定
-    webviewView.webview.html = this.getWebviewContent(nonce);
+// 純粋関数: 現在の設定を取得
+const getCurrentOptions = (): OptionsMap => {
+  const config = vscode.workspace.getConfiguration("jestTestSelector");
+  return config.get<OptionsMap>("cliOptions") || {};
+};
 
-    // メッセージ受信ハンドラを設定
-    webviewView.webview.onDidReceiveMessage(async (message) => {
-      switch (message.command) {
-        case "saveOptions":
-          try {
-            // 設定を更新
-            const config =
-              vscode.workspace.getConfiguration("jestTestSelector");
-            await config.update(
-              "cliOptions",
-              message.options,
-              vscode.ConfigurationTarget.Global
-            );
+// 純粋関数: WebViewのHTMLコンテンツを生成
+const generateWebviewContent = (
+  extensionUri: vscode.Uri,
+  webview: vscode.Webview | undefined,
+  cspSource: string | undefined
+): string => {
+  // 現在の設定とJestオプションを取得
+  const currentOptions = getCurrentOptions();
+  const jestOptions = createJestOptions(currentOptions);
+  const optionCategories = getOptionCategories();
 
-            // 保存完了メッセージをWebViewに送信
-            this._view?.webview.postMessage({
-              command: "saveComplete",
-              success: true,
-            });
-          } catch (error) {
-            console.error("設定保存エラー:", error);
+  // カテゴリごとにHTMLを生成
+  const categoriesHtml = optionCategories
+    .map((category) => createCategoryHtml(category, jestOptions))
+    .join("");
 
-            // エラーメッセージをWebViewに送信
-            this._view?.webview.postMessage({
-              command: "saveComplete",
-              success: false,
-              message: `設定の保存に失敗しました: ${error}`,
-            });
+  // タイムスタンプを追加してキャッシュバスティング
+  const timestamp = new Date().getTime();
 
-            // エラーの場合のみVS Code通知を表示
-            vscode.window.showErrorMessage(
-              `設定の保存に失敗しました: ${error}`
-            );
-          }
-          break;
-      }
-    });
+  // スタイルシートURI
+  const styleUri = webview
+    ? webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "media", "settings.css")
+      )
+    : "";
 
-    // ビューが破棄されたときのクリーンアップ
-    webviewView.onDidDispose(() => {
-      this.disposeFileWatcher();
-    });
-
-    console.log("テスト設定WebViewの初期化が完了しました");
-  }
-
-  /**
-   * ファイルウォッチャーを破棄する
-   */
-  private disposeFileWatcher() {
-    if (this._fileWatcher) {
-      this._fileWatcher.dispose();
-      this._fileWatcher = undefined;
-    }
-  }
-
-  /**
-   * WebViewのHTMLコンテンツを生成
-   */
-  private getWebviewContent(nonce?: string): string {
-    // 現在の設定を取得
-    const config = vscode.workspace.getConfiguration("jestTestSelector");
-    const currentOptions = config.get<Record<string, any>>("cliOptions") || {};
-
-    // Jest CLI オプションの定義
-    const jestOptions = [
-      {
-        id: "--watch",
-        label: "ウォッチモード",
-        description:
-          "ファイルの変更を監視し、関連するテストを自動で再実行します",
-        value: !!currentOptions["--watch"],
-      },
-      {
-        id: "--watchAll",
-        label: "すべてをウォッチ",
-        description:
-          "ファイルの変更を監視し、すべてのテストを自動で再実行します",
-        value: !!currentOptions["--watchAll"],
-      },
-      {
-        id: "--coverage",
-        label: "カバレッジ",
-        description: "コードカバレッジレポートを生成します",
-        value: !!currentOptions["--coverage"],
-      },
-      {
-        id: "--verbose",
-        label: "バーボース",
-        description:
-          "各テストごとの結果をテストスイートの階層構造とともに表示します。",
-        value: currentOptions["--verbose"] !== false, // デフォルトでtrue
-      },
-      {
-        id: "--colors",
-        label: "カラー出力",
-        description: "色付きの出力を使用します",
-        value: currentOptions["--colors"] !== false, // デフォルトでtrue
-      },
-      {
-        id: "--bail",
-        label: "失敗時に停止",
-        description: "テストが失敗したら実行を中止します",
-        value: !!currentOptions["--bail"],
-      },
-      {
-        id: "--updateSnapshot",
-        label: "スナップショット更新 (-u)",
-        description: "失敗したスナップショットテストを更新します",
-        value: !!currentOptions["--updateSnapshot"],
-      },
-      {
-        id: "--onlyChanged",
-        label: "変更されたファイルのみ (-o)",
-        description:
-          "git/hgで変更されたファイルに関連するテストのみを実行します",
-        value: !!currentOptions["--onlyChanged"],
-      },
-      {
-        id: "--runInBand",
-        label: "シリアル実行 (-i)",
-        description: "テストを並列ではなく1つずつ実行します（デバッグに便利）",
-        value: !!currentOptions["--runInBand"],
-      },
-      {
-        id: "--detectOpenHandles",
-        label: "オープンハンドル検出",
-        description:
-          "完了しないPromiseやタイマーなどの開いたままのハンドルを検出します",
-        value: !!currentOptions["--detectOpenHandles"],
-      },
-      {
-        id: "--ci",
-        label: "CI環境モード",
-        description: "CI環境に最適化された設定で実行します",
-        value: !!currentOptions["--ci"],
-      },
-      {
-        id: "--silent",
-        label: "サイレントモード",
-        description: "コンソールへの出力を最小限にします",
-        value: !!currentOptions["--silent"],
-      },
-      {
-        id: "--forceExit",
-        label: "強制終了",
-        description: "テスト完了後に強制的にJestを終了します",
-        value: !!currentOptions["--forceExit"],
-      },
-      {
-        id: "--noStackTrace",
-        label: "スタックトレース無効",
-        description: "エラー時のスタックトレースを非表示にします",
-        value: !!currentOptions["--noStackTrace"],
-      },
-      {
-        id: "--passWithNoTests",
-        label: "テスト無しでもパス",
-        description: "テストが見つからなくてもエラーにしません",
-        value: !!currentOptions["--passWithNoTests"],
-      },
-      {
-        id: "--runTestsByPath",
-        label: "パスでテスト実行",
-        description:
-          "正規表現マッチングではなくファイルパスに基づいてテストを実行します",
-        value: !!currentOptions["--runTestsByPath"],
-      },
-      {
-        id: "--expand",
-        label: "差分を展開",
-        description: "テスト失敗時に差分を完全に展開して表示します",
-        value: !!currentOptions["--expand"],
-      },
-      {
-        id: "--useStderr",
-        label: "標準エラー出力に出力",
-        description: "全ての出力を標準エラー出力に出力します",
-        value: !!currentOptions["--useStderr"],
-      },
-      {
-        id: "--no-cache",
-        label: "キャッシュを使用しない",
-        description:
-          "注意: キャッシュの無効化はキャッシュに関連した問題が発生した場合のみ行って下さい。 概して、キャッシュの無効化によりJestの実行時間は2倍になります。",
-        value: !!currentOptions["--no-cache"],
-      },
-      {
-        id: "--debug",
-        label: "デバッグモード",
-        description: "デバッグ情報を出力します",
-        value: !!currentOptions["--debug"],
-      },
-      {
-        id: "--errorOnDeprecated",
-        label: "非推奨機能でエラー",
-        description: "非推奨のAPIが使用された場合にエラーを発生させます",
-        value: !!currentOptions["--errorOnDeprecated"],
-      },
-      {
-        id: "--notify",
-        label: "通知",
-        description:
-          "テスト完了時にOSの通知を表示します（要node-notifierパッケージ）",
-        value: !!currentOptions["--notify"],
-      },
-      {
-        id: "--watchman",
-        label: "Watchmanを使用",
-        description: "ファイル監視にWatchmanを使用します（デフォルトはtrue）",
-        value: currentOptions["--watchman"] !== false, // デフォルトでtrue
-      },
-      {
-        id: "--onlyFailures",
-        label: "失敗したテストのみ (-f)",
-        description: "前回失敗したテストのみを実行します",
-        value: currentOptions["--onlyFailures"] === true ? true : false,
-      },
-    ];
-
-    // オプションをカテゴリに分類
-    const optionCategories = [
-      {
-        title: "実行モード",
-        options: [
-          "--watch",
-          "--watchAll",
-          "--onlyChanged",
-          "--runInBand",
-          "--ci",
-          "--passWithNoTests",
-          "--runTestsByPath",
-          "--onlyFailures",
-        ],
-      },
-      {
-        title: "出力設定",
-        options: [
-          "--verbose",
-          "--colors",
-          "--silent",
-          "--noStackTrace",
-          "--expand",
-          "--json",
-          "--useStderr",
-        ],
-      },
-      {
-        title: "テスト動作",
-        options: [
-          "--bail",
-          "--coverage",
-          "--updateSnapshot",
-          "--detectOpenHandles",
-          "--forceExit",
-          "--debug",
-          "--errorOnDeprecated",
-        ],
-      },
-      {
-        title: "その他",
-        options: ["--no-cache", "--notify", "--watchman"],
-      },
-    ];
-
-    // オプションのHTMLを生成
-    let optionsHtml = "";
-
-    // カテゴリごとにセクション分け
-    optionCategories.forEach((category) => {
-      optionsHtml += `
-        <div class="option-category">
-          <h4 class="category-title">${category.title}</h4>
-          <div class="category-items">
-      `;
-
-      // カテゴリに含まれるオプションを追加
-      category.options.forEach((optionId) => {
-        const option = jestOptions.find((opt) => opt.id === optionId);
-        if (option) {
-          optionsHtml += `
-            <div class="option-item">
-              <div class="option-header" title="${option.description}">
-                <input type="checkbox" id="${option.id}" class="checkbox" ${
-            option.value ? "checked" : ""
-          }>
-                <label for="${option.id}" class="option-label">${
-            option.label
-          }</label>
-              </div>
-            </div>
-          `;
-        }
-      });
-
-      optionsHtml += `
-          </div>
-        </div>
-      `;
-    });
-
-    // タイムスタンプを追加してキャッシュバスティング
-    const timestamp = new Date().getTime();
-
-    // スタイルシートURI
-    const styleUri = this._view
-      ? this._view.webview.asWebviewUri(
-          vscode.Uri.joinPath(this._extensionUri, "media", "settings.css")
-        )
-      : "";
-
-    return `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Jest オプション設定</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._view?.webview.cspSource}; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src 'unsafe-inline';">
   <link href="${styleUri}?v=${timestamp}" rel="stylesheet">
 </head>
 <body>
   <div class="options-container">
-    ${optionsHtml}
+    ${categoriesHtml}
   </div>
   <div id="saveStatus" class="save-status"></div>
 
@@ -444,18 +361,122 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
   </script>
 </body>
 </html>`;
+};
+
+// 純粋関数: 設定保存処理
+const saveOptions = async (
+  options: OptionsMap
+): Promise<{ success: boolean; message?: string }> => {
+  try {
+    // 設定を更新
+    const config = vscode.workspace.getConfiguration("jestTestSelector");
+    await config.update(
+      "cliOptions",
+      options,
+      vscode.ConfigurationTarget.Global
+    );
+    return { success: true };
+  } catch (error) {
+    console.error("設定保存エラー:", error);
+    return {
+      success: false,
+      message: `設定の保存に失敗しました: ${error}`,
+    };
+  }
+};
+
+/**
+ * テスト設定ビューのプロバイダークラス
+ * VSCode APIとの統合のみを担当
+ */
+export class TestSettingsProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = "jestTestSelector.testSettings";
+  private _view?: vscode.WebviewView;
+  private static _instance: TestSettingsProvider;
+  private _fileWatcher?: vscode.FileSystemWatcher;
+
+  // シングルトンインスタンスを取得
+  public static getInstance(extensionUri: vscode.Uri): TestSettingsProvider {
+    if (!TestSettingsProvider._instance) {
+      TestSettingsProvider._instance = new TestSettingsProvider(extensionUri);
+    }
+    return TestSettingsProvider._instance;
+  }
+
+  constructor(private readonly _extensionUri: vscode.Uri) {}
+
+  /**
+   * 設定を更新する
+   */
+  public updateView(): void {
+    if (this._view) {
+      const html = generateWebviewContent(
+        this._extensionUri,
+        this._view.webview,
+        this._view.webview.cspSource
+      );
+      this._view.webview.html = html;
+    }
   }
 
   /**
-   * ランダムなnonceを生成
+   * WebViewを解決
    */
-  private getNonce(): string {
-    let text = "";
-    const possible =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ): void {
+    console.log("TestSettingsProvider.resolveWebviewView called");
+
+    this._view = webviewView;
+
+    // Webviewの設定
+    webviewView.webview.options = {
+      enableScripts: true, // スクリプト有効化
+      localResourceRoots: [this._extensionUri],
+    };
+
+    // HTMLコンテンツを設定
+    webviewView.webview.html = generateWebviewContent(
+      this._extensionUri,
+      webviewView.webview,
+      webviewView.webview.cspSource
+    );
+
+    // メッセージ受信ハンドラを設定
+    webviewView.webview.onDidReceiveMessage(async (message) => {
+      if (message.command === "saveOptions") {
+        const result = await saveOptions(message.options);
+
+        // 結果をWebViewに送信
+        this._view?.webview.postMessage({
+          command: "saveComplete",
+          ...result,
+        });
+
+        // エラーの場合のみVS Code通知を表示
+        if (!result.success && result.message) {
+          vscode.window.showErrorMessage(result.message);
+        }
+      }
+    });
+
+    // ビューが破棄されたときのクリーンアップ
+    webviewView.onDidDispose(() => {
+      this.disposeFileWatcher();
+    });
+
+    console.log("テスト設定WebViewの初期化が完了しました");
+  }
+
+  /**
+   * ファイルウォッチャーを破棄する
+   */
+  private disposeFileWatcher(): void {
+    if (this._fileWatcher) {
+      this._fileWatcher.dispose();
+      this._fileWatcher = undefined;
     }
-    return text;
   }
 }

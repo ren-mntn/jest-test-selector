@@ -8,7 +8,87 @@ export type OnlyLocation = {
   testCase: TestCase;
 };
 
+/**
+ * .only検出と状態管理を行うクラス
+ */
+export class OnlyDetector {
+  // .onlyの検出を通知するためのイベント
+  private _onDidDetectOnly = new vscode.EventEmitter<boolean>();
+  readonly onDidDetectOnly: vscode.Event<boolean> = this._onDidDetectOnly.event;
+
+  // .onlyの検出状態
+  private _hasDetectedOnly: boolean = false;
+
+  // .onlyを含むファイルとテスト情報のリスト
+  private _onlyLocations: OnlyLocation[] = [];
+
+  constructor() {}
+
+  /**
+   * .onlyが検出されているかを取得
+   */
+  public getHasDetectedOnly(): boolean {
+    return this._hasDetectedOnly;
+  }
+
+  /**
+   * .onlyを含むテストケースの位置情報を返す
+   */
+  public getOnlyLocations(): OnlyLocation[] {
+    return this._onlyLocations;
+  }
+
+  /**
+   * テストファイルでonlyが検出されたら状態を更新
+   * @param filePath テストファイルのパス
+   * @param testCases 検出されたテストケース配列
+   */
+  public updateOnlyState(filePath: string, testCases: TestCase[]): void {
+    // このファイルの.only位置情報を削除
+    this._onlyLocations = this._onlyLocations.filter(
+      (loc) => loc.filePath !== filePath
+    );
+
+    // .onlyを含むテストケースがあるか確認
+    const onlyTestCases = testCases.filter((testCase) => testCase.hasOnly);
+    const hasOnlyInFile = onlyTestCases.length > 0;
+
+    // 見つかった場合は追加
+    if (hasOnlyInFile) {
+      onlyTestCases.forEach((testCase) => {
+        this._onlyLocations.push({ filePath, testCase });
+      });
+    }
+
+    // 全体で.onlyがあるかどうかを更新
+    const hasAnyOnly = this._onlyLocations.length > 0;
+
+    // 状態が変化した場合のみイベント発行
+    if (this._hasDetectedOnly !== hasAnyOnly) {
+      this._hasDetectedOnly = hasAnyOnly;
+      this._onDidDetectOnly.fire(hasAnyOnly);
+    }
+  }
+
+  /**
+   * .onlyの状態をリセット
+   */
+  public resetOnlyState(): void {
+    const hadOnly = this._hasDetectedOnly;
+    this._onlyLocations = [];
+    this._hasDetectedOnly = false;
+
+    // 以前に.onlyが検出されていた場合のみイベント発行
+    if (hadOnly) {
+      this._onDidDetectOnly.fire(false);
+    }
+  }
+}
+
 // test.onlyを含むテストケースを見つけて、UIで表示する
+
+// グローバルインスタンス
+export const onlyDetector = new OnlyDetector();
 
 // デコレーションタイプの作成（純粋な値として定義）
 export const createOnlyDecorationType = () =>
@@ -293,9 +373,6 @@ export const handleGoToOnlyLocation = async (
 // 拡張機能のアクティベート時に呼び出す初期化関数
 export const registerOnlyDetectionFeatures = (
   context: vscode.ExtensionContext,
-  getOnlyLocations: () => OnlyLocation[],
-  hasDetectedOnly: () => boolean,
-  onDidDetectOnly: vscode.Event<boolean>,
   extractTestCases: (filePath: string) => Promise<TestCase[]>
 ): void => {
   // デコレーションタイプを作成
@@ -305,10 +382,10 @@ export const registerOnlyDetectionFeatures = (
   const statusBarItem = createOnlyWarningStatusBar();
 
   // ステータスバーの初期状態を設定
-  updateStatusBar(statusBarItem, hasDetectedOnly());
+  updateStatusBar(statusBarItem, onlyDetector.getHasDetectedOnly());
 
   // .only検出イベントのリスナー登録
-  const onlyDetectionListener = onDidDetectOnly((hasOnly) => {
+  const onlyDetectionListener = onlyDetector.onDidDetectOnly((hasOnly) => {
     updateStatusBar(statusBarItem, hasOnly);
   });
 
@@ -316,7 +393,9 @@ export const registerOnlyDetectionFeatures = (
   const activeEditorChangeListener = vscode.window.onDidChangeActiveTextEditor(
     (editor) => {
       if (editor) {
-        updateDecorations(editor, onlyDecorationType, getOnlyLocations);
+        updateDecorations(editor, onlyDecorationType, () =>
+          onlyDetector.getOnlyLocations()
+        );
       }
     }
   );
@@ -326,7 +405,9 @@ export const registerOnlyDetectionFeatures = (
     (event) => {
       const editor = vscode.window.activeTextEditor;
       if (editor && event.document === editor.document) {
-        updateDecorations(editor, onlyDecorationType, getOnlyLocations);
+        updateDecorations(editor, onlyDecorationType, () =>
+          onlyDetector.getOnlyLocations()
+        );
       }
     }
   );
@@ -335,7 +416,7 @@ export const registerOnlyDetectionFeatures = (
   const configChangeListener = vscode.workspace.onDidChangeConfiguration(
     (event) => {
       if (event.affectsConfiguration("jestTestSelector.showOnlyWarning")) {
-        updateStatusBar(statusBarItem, hasDetectedOnly());
+        updateStatusBar(statusBarItem, onlyDetector.getHasDetectedOnly());
       }
     }
   );
@@ -343,15 +424,17 @@ export const registerOnlyDetectionFeatures = (
   // .only箇所に移動するコマンドを登録
   const goToOnlyLocationCommand = vscode.commands.registerCommand(
     "jestTestSelector.goToOnlyLocation",
-    () => handleGoToOnlyLocation(getOnlyLocations, extractTestCases)
+    () =>
+      handleGoToOnlyLocation(
+        () => onlyDetector.getOnlyLocations(),
+        extractTestCases
+      )
   );
 
   // 現在のエディタにデコレーションを適用
   if (vscode.window.activeTextEditor) {
-    updateDecorations(
-      vscode.window.activeTextEditor,
-      onlyDecorationType,
-      getOnlyLocations
+    updateDecorations(vscode.window.activeTextEditor, onlyDecorationType, () =>
+      onlyDetector.getOnlyLocations()
     );
   }
 

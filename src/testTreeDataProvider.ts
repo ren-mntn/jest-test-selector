@@ -1,8 +1,10 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { JestDebugger, TestResultStatus, onTestOutput } from "./debugger";
+import { onlyDetector } from "./onlyDetector";
 import { TestCase, extractTestCases } from "./testExtractor";
-import { onTestSessionEnd } from "./testResultProcessor";
+import * as testResultProcessor from "./testResultProcessor2";
+import { TestResultStatus, onTestResultsUpdated } from "./testResultProcessor2";
+import { isTestFile } from "./testUtils";
 
 /**
  * TreeViewに表示するアイテムのタイプ
@@ -22,7 +24,7 @@ export class TestTreeItem extends vscode.TreeItem {
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
     public readonly type: TestItemType,
     public readonly filePath: string,
-    public readonly isTestFile: boolean,
+    public readonly isTestFileFlag: boolean,
     public readonly testCase?: TestCase
   ) {
     super(label, collapsibleState);
@@ -34,7 +36,7 @@ export class TestTreeItem extends vscode.TreeItem {
         this.contextValue = "packageAllTests";
         break;
       case "file":
-        if (isTestFile) {
+        if (isTestFileFlag) {
           // テストファイルの場合、テスト結果に基づいてアイコンを設定
           const testStatus = this.checkFileTestStatus();
           if (testStatus === "success") {
@@ -72,7 +74,7 @@ export class TestTreeItem extends vscode.TreeItem {
         );
 
         // ファイルノードはテストファイルの場合、実行可能なコンテキスト値を設定
-        if (isTestFile) {
+        if (isTestFileFlag) {
           this.contextValue = "runnableTestFile";
         } else {
           this.contextValue = "testFile";
@@ -124,7 +126,7 @@ export class TestTreeItem extends vscode.TreeItem {
 
     // ファイルノードまたはdescribeノード（ファイルを表す場合）であり、
     // かつテストファイルの場合に実行用コンテキストを追加
-    if ((type === "file" || type === "describe") && isTestFile) {
+    if ((type === "file" || type === "describe") && isTestFileFlag) {
       // 既存のコンテキスト値にスペース区切りで追加
       const runnableContext = "runnableTestFile";
       this.contextValue = this.contextValue
@@ -215,9 +217,9 @@ export class TestTreeItem extends vscode.TreeItem {
     }
 
     // テスト結果を取得
-    const testResult = JestDebugger.getTestResult(
+    const testResult = testResultProcessor.getTestResult(
       this.filePath,
-      this.testCase.name
+      this.testCase.fullName // testCase.fullName を使用
     );
 
     if (!testResult) {
@@ -274,40 +276,60 @@ export class TestTreeItem extends vscode.TreeItem {
   private checkFileTestStatus(): "success" | "failure" | "unknown" {
     try {
       // ファイルパスが有効であることを確認
-      if (!this.filePath || !this.isTestFile) {
+      if (!this.filePath || !this.isTestFileFlag) {
         return "unknown";
       }
 
       // テスト結果を取得
-      const allResults = JestDebugger.getAllTestResults();
-      if (allResults.size === 0) {
+      const allResults = testResultProcessor.getAllTestResults();
+      const filePathIndex = testResultProcessor.getFilePathIndex();
+
+      if (Object.keys(allResults).length === 0) {
         return "unknown"; // テスト結果がない場合
       }
 
       // このファイルに関連するテスト結果を抽出
-      const fileBaseName = path.basename(this.filePath);
-      let hasAnyTests = false;
+      const normalizedPath = path.normalize(this.filePath);
+      const baseNameOnly = path.basename(this.filePath);
+
+      // インデックスからファイルに関連するキーを取得
+      const relatedKeys = new Set<string>();
+
+      // 正規化されたパスでインデックスから検索
+      const pathKeys = filePathIndex.get(normalizedPath);
+      if (pathKeys) {
+        pathKeys.forEach((key) => relatedKeys.add(key));
+      }
+
+      // ファイル名のみでもインデックスから検索
+      const baseNameKeys = filePathIndex.get(baseNameOnly);
+      if (baseNameKeys) {
+        baseNameKeys.forEach((key) => relatedKeys.add(key));
+      }
+
+      // 関連するキーが見つからない場合は未知の状態を返す
+      if (relatedKeys.size === 0) {
+        return "unknown";
+      }
+
+      // インデックスから取得したキーを使用してテスト結果をチェック
       let hasFailedTests = false;
 
-      for (const [key, result] of allResults.entries()) {
-        // このファイルに関連するテスト結果のみを処理
-        if (key.includes(this.filePath) || key.includes(fileBaseName)) {
-          hasAnyTests = true;
+      for (const key of relatedKeys) {
+        const separatorIndex = key.lastIndexOf("#");
+        if (separatorIndex !== -1) {
+          const filePath = key.substring(0, separatorIndex);
+          const testName = key.substring(separatorIndex + 1);
+          const result = allResults[filePath]?.[testName];
 
-          // 失敗したテストがあるかをチェック
-          if (result.status === TestResultStatus.Failure) {
+          if (result && result.status === TestResultStatus.Failure) {
             hasFailedTests = true;
-            break; // 1つでも失敗したテストがあれば処理終了
+            break;
           }
         }
       }
 
-      // テスト結果が見つからない場合
-      if (!hasAnyTests) {
-        return "unknown";
-      }
-
-      // 失敗したテストがある場合は failure、なければ success
+      // 関連するテスト結果が見つかり、すべて成功していればsuccess
       return hasFailedTests ? "failure" : "success";
     } catch (error) {
       console.error("テスト結果チェック中にエラーが発生:", error);
@@ -350,19 +372,9 @@ export class TestTreeDataProvider
     TestTreeItem | undefined | null | void
   > = this._onDidChangeTreeData.event;
 
-  // .onlyの検出を通知するためのイベント
-  private _onDidDetectOnly: vscode.EventEmitter<boolean> =
-    new vscode.EventEmitter<boolean>();
-  readonly onDidDetectOnly: vscode.Event<boolean> = this._onDidDetectOnly.event;
-
   private rootNodes: TestNode[] = [];
   private lastActiveFilePath?: string;
   private failedTestsNode: TestNode | null = null;
-  private _hasDetectedOnly: boolean = false;
-  // .onlyを含むファイルとテスト情報のリスト
-  private _onlyLocations: { filePath: string; testCase: TestCase }[] = [];
-
-  // パッケージディレクトリのキャッシュ
   private packageDirectoriesCache: {
     [key: string]: { path: string; name: string };
   } = {};
@@ -374,29 +386,17 @@ export class TestTreeDataProvider
     // アクティブエディタの変更を監視
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (editor && this.isTestFile(editor.document.uri.fsPath)) {
+        if (editor && isTestFile(editor.document.uri.fsPath)) {
           this.refresh();
         }
       })
     );
 
-    // テスト出力イベントを監視
+    // テスト結果が更新されたときにツリービューを更新
     this.disposables.push(
-      onTestOutput(() => {
-        // テスト出力が更新されたらツリービューを更新
-        this._onDidChangeTreeData.fire();
-      })
-    );
-
-    // テストセッション終了イベントを監視
-    this.disposables.push(
-      onTestSessionEnd(() => {
-        // テストセッションが終了したらツリービューを更新
-        console.log("テストセッション終了を検知、ツリービューを更新します");
-        // 少し遅延させて最新のテスト結果が反映されるようにする
-        setTimeout(() => {
-          this._onDidChangeTreeData.fire();
-        }, 100);
+      onTestResultsUpdated(() => {
+        console.log("テスト結果更新を検知、ツリービューを更新します");
+        this.refresh();
       })
     );
 
@@ -405,7 +405,7 @@ export class TestTreeDataProvider
       vscode.workspace.onDidChangeTextDocument((event) => {
         const filePath = event.document.uri.fsPath;
         // テストファイルの変更を検出したら更新
-        if (this.isTestFile(filePath)) {
+        if (isTestFile(filePath)) {
           this.updateTestFile(filePath);
         }
       })
@@ -440,7 +440,7 @@ export class TestTreeDataProvider
     filePath: string
   ): Promise<string | null> {
     // 既にテストファイルの場合はそのまま返す
-    if (this.isTestFile(filePath)) {
+    if (isTestFile(filePath)) {
       return filePath;
     }
 
@@ -458,7 +458,6 @@ export class TestTreeDataProvider
       await vscode.workspace.fs.stat(vscode.Uri.file(testFilePath));
       return testFilePath;
     } catch {
-      console.log(`対応するテストファイルが見つかりません: ${testFilePath}`);
       return null;
     }
   }
@@ -480,7 +479,7 @@ export class TestTreeDataProvider
       // テストファイルをフィルタリング
       const testFiles = entries
         .filter(([name, type]) => {
-          return type === vscode.FileType.File && this.isTestFile(name);
+          return type === vscode.FileType.File && isTestFile(name);
         })
         .map(([name]) => path.join(dirPath, name));
 
@@ -512,42 +511,21 @@ export class TestTreeDataProvider
       // ディレクトリノードをルートノードとして設定
       this.rootNodes = [directoryNode];
 
-      // すべてのテストファイルからテストケースを抽出
-      // .onlyの検出状態をトラッキング
-      let hasOnlyInAnyFile = false;
+      // onlyDetectorの状態をリセット
+      onlyDetector.resetOnlyState();
 
-      // .onlyの位置情報をリセット
-      this._onlyLocations = [];
-
+      // 各テストファイルを処理
       for (const testFile of testFiles) {
         const testCases = await extractTestCases(testFile);
         if (testCases.length === 0) {
           continue;
         }
 
-        // ファイル内にonly付きのテストがあるかチェック
-        const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
-        if (hasOnlyInFile) {
-          hasOnlyInAnyFile = true;
-
-          // .onlyを含むテストケースをリストに追加
-          testCases
-            .filter((testCase) => testCase.hasOnly)
-            .forEach((testCase) => {
-              this._onlyLocations.push({
-                filePath: testFile,
-                testCase,
-              });
-            });
-        }
-
-        // ファイル名を取得
-        const fileName = path.basename(testFile);
-        // extractParamsプレフィックスを持つファイルは特別扱い
-        const isExtractParamsFile =
-          fileName.startsWith("extractParams") && fileName.endsWith(".test.ts");
+        // onlyDetectorに通知
+        onlyDetector.updateOnlyState(testFile, testCases);
 
         // ファイルノードを作成
+        const fileName = path.basename(testFile);
         const fileNode: TestNode = {
           name: fileName,
           type: "file",
@@ -556,30 +534,36 @@ export class TestTreeDataProvider
         };
         directoryNode.children.push(fileNode);
 
+        // 単一の describe ブロックを省略するかどうかの判定
+        let omitSingleDescribe = false;
+        if (testCases.length > 0) {
+          const firstDescribePath = testCases[0].describePath;
+          if (firstDescribePath.length === 1) {
+            // describe のネストが1階層のみ
+            omitSingleDescribe = testCases.every(
+              (tc) =>
+                tc.describePath.length === 1 &&
+                tc.describePath[0] === firstDescribePath[0]
+            );
+          }
+        }
+
+        // extractParamsファイルは特別扱い (omitSingleDescribeより優先)
+        const isExtractParamsFile =
+          fileName.startsWith("extractParams") && fileName.endsWith(".test.ts");
+
         // 各テストケースをツリーに追加
         for (const testCase of testCases) {
-          // extractParamsファイルの場合はフラットに表示
-          if (isExtractParamsFile) {
-            const testNode: TestNode = {
-              name: testCase.name,
-              type: "testCase",
-              filePath: testFile,
-              children: [],
-              testCase,
-            };
-            fileNode.children.push(testNode);
-          } else {
-            let currentNode = fileNode;
-            const describePath = [...testCase.describePath]; // コピーを作成
+          let parentNode = fileNode; // デフォルトはファイルノード
 
-            // describeブロックのパスに沿ってノードを構築
+          // describeネストを構築するかどうか
+          if (!isExtractParamsFile && !omitSingleDescribe) {
+            // 通常通り describe ネストを構築
+            const describePath = [...testCase.describePath];
             for (const descName of describePath) {
-              // 既存のノードを探す
-              let descNode = currentNode.children.find(
+              let descNode = parentNode.children.find(
                 (child) => child.type === "describe" && child.name === descName
               );
-
-              // 存在しなければ新規作成
               if (!descNode) {
                 descNode = {
                   name: descName,
@@ -587,32 +571,23 @@ export class TestTreeDataProvider
                   filePath: testFile,
                   children: [],
                 };
-                currentNode.children.push(descNode);
+                parentNode.children.push(descNode);
               }
-
-              // 次のレベルへ
-              currentNode = descNode;
+              parentNode = descNode;
             }
-
-            // テストケースノードを追加
-            const testNode: TestNode = {
-              name: testCase.name,
-              type: "testCase",
-              filePath: testFile,
-              children: [],
-              testCase,
-            };
-            currentNode.children.push(testNode);
           }
-        }
-      }
+          // else: parentNode は fileNode のまま (ファイル直下にテストケースを追加)
 
-      // すべてのファイルの処理が終わった後、.onlyの検出状態を更新
-      console.log(`ディレクトリ内のファイルのhasOnly状態: ${hasOnlyInAnyFile}`);
-      if (this._hasDetectedOnly !== hasOnlyInAnyFile) {
-        this._hasDetectedOnly = hasOnlyInAnyFile;
-        this._onDidDetectOnly.fire(hasOnlyInAnyFile);
-        console.log(`onDidDetectOnlyイベントを発火: ${hasOnlyInAnyFile}`);
+          // テストケースノードを追加
+          const testNode: TestNode = {
+            name: testCase.name,
+            type: "testCase",
+            filePath: testFile,
+            children: [],
+            testCase,
+          };
+          parentNode.children.push(testNode);
+        }
       }
     } catch (error) {
       vscode.window.showErrorMessage(
@@ -628,19 +603,13 @@ export class TestTreeDataProvider
    */
   public async refresh(): Promise<void> {
     try {
-      console.log("テストツリーデータの更新を開始");
       // ルートノードを初期化
       this.rootNodes = this.buildRootNodes();
-
-      // .onlyの検出状態をリセット
-      this._hasDetectedOnly = false;
-      this._onlyLocations = [];
 
       // 現在アクティブなエディタを取得
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
         // エディタが開かれていない場合は空のツリーを表示
-        console.log("アクティブなエディタがありません、空のツリーを表示します");
         this._onDidChangeTreeData.fire();
         return;
       }
@@ -648,30 +617,23 @@ export class TestTreeDataProvider
       const filePath = editor.document.uri.fsPath;
       this.lastActiveFilePath = filePath;
 
-      console.log(`アクティブファイル: ${filePath}`);
       const currentDirPath = path.dirname(filePath);
 
       // Jest設定ファイルのあるパッケージディレクトリを検索
       const packageInfo = await this.findPackageDirectoryWithJestConfig(
         filePath
       );
-      console.log(
-        `検出されたパッケージ: ${packageInfo ? packageInfo.name : "なし"}`
-      );
 
       // ディレクトリ内のすべてのテストファイルを検索
       const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
-      console.log(`ディレクトリ内のテストファイル数: ${testFiles.length}`);
 
       if (testFiles.length > 0) {
         // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
-        // 現在のディレクトリが前回と同じ場合は不要な更新をスキップ
         if (
           this.lastActiveFilePath === currentDirPath &&
           this.rootNodes.length > 1 &&
           this.rootNodes[1].name === `${path.basename(currentDirPath)}`
         ) {
-          console.log("ディレクトリが前回と同じため更新をスキップします");
           return;
         }
 
@@ -679,7 +641,6 @@ export class TestTreeDataProvider
         this.lastActiveFilePath = currentDirPath;
 
         // ディレクトリベースのツリーを構築
-        console.log(`ディレクトリベースのツリーを構築: ${currentDirPath}`);
         await this.buildDirectoryTestTree(currentDirPath, testFiles);
 
         // パッケージ情報が見つかった場合、パッケージノードを追加
@@ -687,7 +648,6 @@ export class TestTreeDataProvider
           this.addPackageTestNode(packageInfo);
         }
 
-        console.log("ツリービューを更新します");
         this._onDidChangeTreeData.fire();
         return;
       }
@@ -695,21 +655,16 @@ export class TestTreeDataProvider
       // テストファイルを特定
       let testFilePath: string | null = null;
 
-      if (this.isTestFile(filePath)) {
+      if (isTestFile(filePath)) {
         // 現在のファイルがテストファイルの場合はそのまま使用
         testFilePath = filePath;
-        console.log(`現在のファイルはテストファイルです: ${testFilePath}`);
       } else {
         // 実装ファイルの場合は対応するテストファイルを探す
         testFilePath = await this.findCorrespondingTestFile(filePath);
-        console.log(
-          `対応するテストファイル: ${testFilePath || "見つかりません"}`
-        );
       }
 
       // テストファイルが見つからない場合は何もしない
       if (!testFilePath) {
-        console.log("テストファイルが見つからないため更新を中止します");
         return;
       }
 
@@ -720,7 +675,6 @@ export class TestTreeDataProvider
         this.rootNodes[0].type === "file" &&
         this.rootNodes[0].name === path.basename(testFilePath)
       ) {
-        console.log("ファイルが前回と同じため更新をスキップします");
         return;
       }
 
@@ -728,11 +682,9 @@ export class TestTreeDataProvider
       this.lastActiveFilePath = testFilePath;
 
       // ツリーデータをリフレッシュ
-      console.log(`テストファイルからツリーを構築: ${testFilePath}`);
       this.rootNodes = [];
       await this.buildTestTree(this.lastActiveFilePath);
 
-      console.log("ツリービューを更新します");
       this._onDidChangeTreeData.fire();
     } catch (error) {
       console.error("テストツリーの更新に失敗しました:", error);
@@ -747,78 +699,45 @@ export class TestTreeDataProvider
       const testCases = await extractTestCases(filePath);
       const fileName = path.basename(filePath);
 
-      // ファイル内にonly付きのテストがあるかチェック
-      const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
-
-      // .onlyの位置情報を更新
-      this._onlyLocations = this._onlyLocations.filter(
-        (loc) => loc.filePath !== filePath
-      );
-
-      if (hasOnlyInFile) {
-        // .onlyを含むテストケースをリストに追加
-        testCases
-          .filter((testCase) => testCase.hasOnly)
-          .forEach((testCase) => {
-            this._onlyLocations.push({
-              filePath: filePath,
-              testCase,
-            });
-          });
-      }
-
-      // .onlyの検出状態が変化した場合にイベントを発火
-      const hasAnyOnly = this._onlyLocations.length > 0;
-      if (this._hasDetectedOnly !== hasAnyOnly) {
-        this._hasDetectedOnly = hasAnyOnly;
-        this._onDidDetectOnly.fire(hasAnyOnly);
-      }
-
       // ファイルノードを作成
       const fileNode: TestNode = {
-        name: path.basename(filePath),
+        name: fileName,
         type: "file",
         filePath,
         children: [],
       };
 
-      // workspaceNodeを保持し、ファイルノードを追加
-      const workspaceNode = this.rootNodes[0]; // ワークスペース全体のテストを実行ノード
-      if (workspaceNode && workspaceNode.type === "packageAllTests") {
-        this.rootNodes = [workspaceNode, fileNode];
-      } else {
-        this.rootNodes = [fileNode]; // ファイルノードのみ
+      // 単一の describe ブロックを省略するかどうかの判定
+      let omitSingleDescribe = false;
+      if (testCases.length > 0) {
+        const firstDescribePath = testCases[0].describePath;
+        if (firstDescribePath.length === 1) {
+          // describe のネストが1階層のみ
+          // すべてのテストケースが同じ describePath を持つか確認
+          omitSingleDescribe = testCases.every(
+            (tc) =>
+              tc.describePath.length === 1 &&
+              tc.describePath[0] === firstDescribePath[0]
+          );
+        }
       }
 
-      // extractParamsプレフィックスを持つファイルは特別扱い
+      // extractParamsプレフィックスを持つファイルは特別扱い (omitSingleDescribeより優先)
       const isExtractParamsFile =
         fileName.startsWith("extractParams") && fileName.endsWith(".test.ts");
 
       // 各テストケースをツリーに追加
       for (const testCase of testCases) {
-        // extractParamsファイルの場合はフラットに表示
-        if (isExtractParamsFile) {
-          const testNode: TestNode = {
-            name: testCase.name,
-            type: "testCase",
-            filePath,
-            children: [],
-            testCase,
-          };
-          fileNode.children.push(testNode);
-        } else {
-          // 通常のファイルは従来通りdescribeネストを使用
-          let currentNode = fileNode;
-          const describePath = [...testCase.describePath]; // コピーを作成
+        let parentNode = fileNode;
 
-          // describeブロックのパスに沿ってノードを構築
+        // describeネストを構築するか、ファイル直下に追加するか
+        if (!isExtractParamsFile && !omitSingleDescribe) {
+          // 通常通り describe ネストを構築
+          const describePath = [...testCase.describePath];
           for (const descName of describePath) {
-            // 既存のノードを探す
-            let descNode = currentNode.children.find(
+            let descNode = parentNode.children.find(
               (child) => child.type === "describe" && child.name === descName
             );
-
-            // 存在しなければ新規作成
             if (!descNode) {
               descNode = {
                 name: descName,
@@ -826,23 +745,23 @@ export class TestTreeDataProvider
                 filePath,
                 children: [],
               };
-              currentNode.children.push(descNode);
+              parentNode.children.push(descNode);
             }
-
-            // 次のレベルへ
-            currentNode = descNode;
+            parentNode = descNode; // 次のレベルへ
           }
-
-          // テストケースノードを追加
-          const testNode: TestNode = {
-            name: testCase.name,
-            type: "testCase",
-            filePath,
-            children: [],
-            testCase,
-          };
-          currentNode.children.push(testNode);
         }
+        // else: isExtractParamsFile または omitSingleDescribe が true の場合
+        // parentNode は fileNode のまま (ファイル直下にテストケースを追加)
+
+        // テストケースノードを追加
+        const testNode: TestNode = {
+          name: testCase.name,
+          type: "testCase",
+          filePath,
+          children: [],
+          testCase,
+        };
+        parentNode.children.push(testNode);
       }
     } catch (error) {
       vscode.window.showErrorMessage(
@@ -857,8 +776,7 @@ export class TestTreeDataProvider
    * テストファイルかどうかを判定
    */
   public isTestFile(filePath: string): boolean {
-    const fileName = path.basename(filePath);
-    return /\.(test|spec)\.(ts|js|tsx|jsx)$/.test(fileName);
+    return isTestFile(filePath);
   }
 
   /**
@@ -876,7 +794,7 @@ export class TestTreeDataProvider
             : vscode.TreeItemCollapsibleState.None,
           node.type,
           node.filePath,
-          this.isTestFile(node.filePath),
+          isTestFile(node.filePath),
           node.testCase
         );
       });
@@ -922,7 +840,7 @@ export class TestTreeDataProvider
           collapsibleState,
           child.type,
           child.filePath,
-          this.isTestFile(child.filePath),
+          isTestFile(child.filePath),
           child.testCase
         );
       })
@@ -1044,54 +962,14 @@ export class TestTreeDataProvider
   }
 
   /**
-   * 現在の.only検出状態を返します
-   * @returns .onlyが検出されたらtrue、そうでなければfalse
-   */
-  public getHasDetectedOnly(): boolean {
-    return this._hasDetectedOnly;
-  }
-
-  /**
-   * .onlyを含むテストケースの位置情報を返します
-   * @returns .onlyを含むテストケースの位置情報のリスト
-   */
-  public getOnlyLocations(): { filePath: string; testCase: TestCase }[] {
-    return this._onlyLocations;
-  }
-
-  /**
    * 単一のテストファイルの内容を更新
    */
   private async updateTestFile(filePath: string): Promise<void> {
     try {
       const testCases = await extractTestCases(filePath);
 
-      // ファイル内にonly付きのテストがあるかチェック
-      const hasOnlyInFile = testCases.some((testCase) => testCase.hasOnly);
-
-      // このファイルの.only位置情報を削除
-      this._onlyLocations = this._onlyLocations.filter(
-        (loc) => loc.filePath !== filePath
-      );
-
-      if (hasOnlyInFile) {
-        // .onlyを含むテストケースをリストに追加
-        testCases
-          .filter((testCase) => testCase.hasOnly)
-          .forEach((testCase) => {
-            this._onlyLocations.push({
-              filePath: filePath,
-              testCase,
-            });
-          });
-      }
-
-      // .onlyの検出状態が変化した場合にイベントを発火
-      const hasAnyOnly = this._onlyLocations.length > 0;
-      if (this._hasDetectedOnly !== hasAnyOnly) {
-        this._hasDetectedOnly = hasAnyOnly;
-        this._onDidDetectOnly.fire(hasAnyOnly);
-      }
+      // onlyDetectorに通知
+      onlyDetector.updateOnlyState(filePath, testCases);
 
       // テストツリーを更新（現在のファイルがこのファイルの場合のみ）
       if (this.lastActiveFilePath === filePath) {

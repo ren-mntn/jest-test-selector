@@ -24,10 +24,12 @@
     "onCommand:jestTestSelector.runFileAllTests",
     "onCommand:jestTestSelector.runSelectedTest",
     "onCommand:jestTestSelector.runPackageAllTests",
+    "onCommand:jestTestSelector.toggleTerminalMode",
+    "onCommand:jestTestSelector.showTerminalMode",
     "onView:jestTestSelector.testExplorer",
     "onView:jestTestSelector.testSettings"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
@@ -80,11 +82,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "jestTestSelector.selectOptions",
-        "title": "Jest: CLIオプションを選択",
-        "icon": "$(settings-gear)"
-      },
-      {
         "command": "jestTestSelector.openSettings",
         "title": "Jest: CLIオプション設定を開く",
         "icon": "$(gear)"
@@ -98,6 +95,16 @@
         "command": "jestTestSelector.goToOnlyLocation",
         "title": "test.only検出箇所に移動",
         "icon": "$(warning)"
+      },
+      {
+        "command": "jestTestSelector.toggleTerminalMode",
+        "title": "ターミナル実行モード切り替え",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "jestTestSelector.showTerminalMode",
+        "title": "ターミナル実行モードボタンを表示",
+        "icon": "$(terminal)"
       }
     ],
     "viewsContainers": {
@@ -128,11 +135,6 @@
       "view/title": [
         {
           "command": "jestTestSelector.refreshTests",
-          "when": "view == jestTestSelector.testExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "jestTestSelector.selectOptions",
           "when": "view == jestTestSelector.testExplorer",
           "group": "navigation"
         },
@@ -196,11 +198,6 @@
         "command": "jestTestSelector.runTest",
         "key": "ctrl+shift+t",
         "mac": "cmd+shift+t"
-      },
-      {
-        "command": "jestTestSelector.selectOptions",
-        "key": "ctrl+shift+o",
-        "mac": "cmd+shift+o"
       },
       {
         "command": "jestTestSelector.runDirectoryTests",
@@ -268,10 +265,14 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run webpack-prod",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
+    "webpack": "webpack --mode development",
+    "webpack-dev": "webpack --mode development --watch",
+    "webpack-prod": "webpack --mode production",
+    "test": "node ./out/test/runTest.js",
     "package": "vsce package"
   },
   "devDependencies": {
@@ -282,7 +283,14 @@
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.44.0",
     "minimatch": "^3.0.4",
+    "ts-loader": "^9.5.2",
     "typescript": "^5.1.6",
-    "vsce": "^2.15.0"
+    "vsce": "^2.15.0",
+    "webpack": "^5.99.5",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "@types/msgpack5": "^3.4.6",
+    "msgpack5": "^6.0.2"
   }
 }

@@ -5,13 +5,14 @@ import { detectMonorepoPackages, PackageInfo } from "./monorepoDetector";
 import { TestCase } from "./testExtractor";
 
 // テスト実行のスコープを定義する型
-export type TestScope = "global" | "directory" | "file" | "test" | "package";
+export type TestScope = "global" | "directory" | "file" | "package";
 
 // テスト実行のオプションを定義する型
 export interface TestRunOptions {
   unitTestOnly?: boolean;
   e2eTestOnly?: boolean;
   runBoth?: boolean;
+  useTerminal?: boolean;
 }
 
 // テスト実行のパラメータを定義する型
@@ -47,96 +48,35 @@ export const createTestRunParameters = (
  */
 export const runTest = async (params: TestRunParameters): Promise<boolean> => {
   const { scope, targetPath, targetPackage, testCase, options } = params;
-  const { unitTestOnly, e2eTestOnly, runBoth } = options;
+  const { unitTestOnly, e2eTestOnly, runBoth, useTerminal } = options;
 
   try {
-    let success = false;
+    // 各パラメータを条件に基づいて一度に計算
+    const debugTargetPath =
+      scope === "package" ? targetPackage.path : targetPath;
 
-    // パッケージのテスト
-    if (scope === "package") {
-      // パッケージ全体のテストを実行するケース
-      if (runBoth) {
-        // 両方（Unit + E2E）実行する場合
-        // 実行
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPackage.path,
-          false,
-          false
-        );
-      } else if (unitTestOnly) {
-        // 実行
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPackage.path,
-          false,
-          false
-        );
-      } else if (e2eTestOnly) {
-        // 実行
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPackage.path,
-          false,
-          true
-        );
-      }
-    } else if (scope === "directory") {
-      // ディレクトリに対するテスト実行
-      console.log(`ディレクトリに対するテスト実行: ${targetPath}`);
-      if (e2eTestOnly) {
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPath,
-          true,
-          true
-        );
-      } else if (unitTestOnly) {
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          path.join(targetPath),
-          true,
-          false
-        );
-      } else {
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          path.join(targetPath),
-          true,
-          true
-        );
-      }
-    } else if (scope === "file") {
-      // ファイルに対するテスト実行
-      if (testCase) {
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPath,
-          targetPath.endsWith(".e2e.test.ts"),
-          false,
-          testCase
-        );
-      } else {
-        success = await JestDebugger.originalStartDebugging(
-          targetPackage.path,
-          targetPath,
-          targetPath.endsWith(".e2e.test.ts"),
-          true
-        );
-      }
-    } else if (scope === "test") {
-      // 個別のテストケース実行
-      if (!testCase) {
-        throw new Error("テストケースが指定されていません");
-      }
-      success = await JestDebugger.originalStartDebugging(
-        targetPackage.path,
-        targetPath,
-        targetPath.endsWith(".e2e.test.ts"),
-        false,
-        testCase
-      );
-    }
+    // ディレクトリスコープの場合はサブディレクトリを除外
+    const excludeSubdirectories = scope === "directory";
+
+    // ファイルスコープの場合はテストケースを指定
+    const currentTestCase = scope === "file" ? testCase : undefined;
+
+    // isE2ETestの計算
+    const isE2ETest =
+      scope === "file"
+        ? targetPath.endsWith(".e2e.test.ts")
+        : scope === "directory"
+        ? e2eTestOnly || !unitTestOnly // ディレクトリでユニットテストのみでない場合はtrue
+        : e2eTestOnly; // パッケージの場合
+
+    // テスト実行
+    const success = await JestDebugger.originalStartDebugging(
+      targetPackage.path,
+      debugTargetPath,
+      isE2ETest,
+      excludeSubdirectories,
+      currentTestCase
+    );
 
     if (!success) {
       vscode.window.showErrorMessage("テスト実行の開始に失敗しました");
@@ -203,7 +143,8 @@ export async function runTestsAtScope(
   testCase?: TestCase,
   unitTestOnly?: boolean,
   e2eTestOnly?: boolean,
-  runBoth?: boolean
+  runBoth?: boolean,
+  useTerminal?: boolean
 ): Promise<void> {
   try {
     // 現在のワークスペースフォルダを取得
@@ -238,7 +179,7 @@ export async function runTestsAtScope(
       targetPath,
       targetPackage,
       testCase,
-      { unitTestOnly, e2eTestOnly, runBoth }
+      { unitTestOnly, e2eTestOnly, runBoth, useTerminal }
     );
 
     // テスト実行
