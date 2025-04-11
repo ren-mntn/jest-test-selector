@@ -1,6 +1,5 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { onlyDetector } from "./onlyDetector";
 import { TestCase, extractTestCases } from "./testExtractor";
 import * as testResultProcessor from "./testResultProcessor2";
 import { TestResultStatus, onTestResultsUpdated } from "./testResultProcessor2";
@@ -201,18 +200,6 @@ export class TestTreeItem extends vscode.TreeItem {
   private setTestCaseIcon(): void {
     if (!this.testCase) {
       this.iconPath = new vscode.ThemeIcon("symbol-method");
-      return;
-    }
-
-    // test.onlyが検出された場合、警告アイコンと警告メッセージを設定
-    if (this.testCase.hasOnly) {
-      this.iconPath = new vscode.ThemeIcon(
-        "warning",
-        new vscode.ThemeColor("testing.iconErrored")
-      );
-      this.tooltip = `${
-        this.tooltip || ""
-      } [警告: test.onlyまたはit.onlyが使用されています。コミット前に削除してください。]`;
       return;
     }
 
@@ -511,18 +498,12 @@ export class TestTreeDataProvider
       // ディレクトリノードをルートノードとして設定
       this.rootNodes = [directoryNode];
 
-      // onlyDetectorの状態をリセット
-      onlyDetector.resetOnlyState();
-
       // 各テストファイルを処理
       for (const testFile of testFiles) {
         const testCases = await extractTestCases(testFile);
         if (testCases.length === 0) {
           continue;
         }
-
-        // onlyDetectorに通知
-        onlyDetector.updateOnlyState(testFile, testCases);
 
         // ファイルノードを作成
         const fileName = path.basename(testFile);
@@ -966,16 +947,9 @@ export class TestTreeDataProvider
    */
   private async updateTestFile(filePath: string): Promise<void> {
     try {
-      const testCases = await extractTestCases(filePath);
-
-      // onlyDetectorに通知
-      onlyDetector.updateOnlyState(filePath, testCases);
-
-      // テストツリーを更新（現在のファイルがこのファイルの場合のみ）
-      if (this.lastActiveFilePath === filePath) {
-        await this.buildTestTree(filePath);
-        this._onDidChangeTreeData.fire();
-      }
+      console.log(
+        `[updateTestFile] Triggered for ${filePath}, but update delegated.`
+      ); // 処理を委譲したことをログに残す
     } catch (error) {
       console.error(`テストファイル更新エラー: ${filePath}`, error);
     }
