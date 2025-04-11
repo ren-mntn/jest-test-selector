@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import * as decorationProvider from "./decorationProvider";
+import { onlyDetector, registerOnlyDetectionFeatures } from "./onlyDetector";
+import { extractTestCases } from "./testExtractor";
 import * as testResultProcessor from "./testResultProcessor2";
+import { onTestResultsUpdated } from "./testResultProcessor2";
 import { runTestsAtScope, TestScope } from "./testRunner";
 import { TestSettingsProvider } from "./testSettingsView";
 import { TestTreeDataProvider, TestTreeItem } from "./testTreeDataProvider";
@@ -160,6 +163,16 @@ export async function activate(context: vscode.ExtensionContext) {
     console.log(
       `テストツリービューデータプロバイダーを作成しました (${
         treeViewEndTime - treeViewStartTime
+      }ms)`
+    );
+
+    // .only関連機能を登録（onlyDetector.tsを使用）
+    const onlyDetectorStartTime = Date.now();
+    registerOnlyDetectionFeatures(context, extractTestCases);
+    const onlyDetectorEndTime = Date.now();
+    console.log(
+      `.only関連機能を登録しました (${
+        onlyDetectorEndTime - onlyDetectorStartTime
       }ms)`
     );
 
@@ -413,6 +426,14 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     disposables.push(textChangeDisposable);
 
+    // .only検出イベントが発生したときにデコレーションを更新
+    const onlyDetectDisposable = onlyDetector.onDidDetectOnly((hasOnly) => {
+      if (hasOnly) {
+        testTreeDataProvider.refresh();
+      }
+    });
+    disposables.push(onlyDetectDisposable);
+
     // Decoration Providerのリソース破棄登録
     context.subscriptions.push({ dispose: () => decorationProvider.dispose() });
 
@@ -426,7 +447,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // テスト結果が更新されたとき
     context.subscriptions.push(
-      testResultProcessor.onTestResultsUpdated(() => {
+      onTestResultsUpdated(() => {
         // 現在アクティブなエディタのDecorationを更新
         decorationProvider.updateDecorations(vscode.window.activeTextEditor);
       })

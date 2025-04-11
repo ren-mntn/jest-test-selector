@@ -14,6 +14,7 @@ export interface TestCase {
   lineNumber: number;
   isAllTests?: boolean;
   isDirectoryAllTests?: boolean;
+  hasOnly?: boolean; // test.onlyまたはit.onlyがある場合にtrue
 }
 
 /**
@@ -40,28 +41,82 @@ export async function extractTestCases(filePath: string): Promise<TestCase[]> {
     // describeブロックのネストを追跡する配列
     const describeStack: { name: string; hasOnly: boolean }[] = [];
 
+    // ファイル全体でdescribe.onlyが使用されているかどうかを追跡
+    let fileHasDescribeOnly = false;
+
     // ASTを走査して、describeブロックとテストケースを検出
     function visit(node: ts.Node) {
       // 関数呼び出し式を探す (describe, it, test など)
       if (ts.isCallExpression(node)) {
-        // describeブロックの名前を取得（最初の引数が文字列リテラルと想定）
-        if (
-          node.arguments.length > 0 &&
-          ts.isStringLiteral(node.arguments[0])
-        ) {
-          const describeName = node.arguments[0].text;
+        const expression = node.expression;
 
-          // describeスタックにpush (hasOnlyを削除)
-          describeStack.push({ name: describeName, hasOnly: false }); // Always false
-
-          // describeブロックの第2引数（関数）の中を探索
-          if (node.arguments.length > 1) {
-            ts.forEachChild(node.arguments[1], visit);
+        // describe, describe.only の検出
+        if (isDescribeCall(expression)) {
+          const isOnly = isOnlyCall(expression);
+          if (isOnly) {
+            fileHasDescribeOnly = true;
           }
 
-          // 探索が終わったらスタックからpop
-          describeStack.pop();
-          return;
+          // describeブロックの名前を取得（最初の引数が文字列リテラルと想定）
+          if (
+            node.arguments.length > 0 &&
+            ts.isStringLiteral(node.arguments[0])
+          ) {
+            const describeName = node.arguments[0].text;
+
+            // describeスタックにpush
+            describeStack.push({ name: describeName, hasOnly: isOnly });
+
+            // describeブロックの第2引数（関数）の中を探索
+            if (node.arguments.length > 1) {
+              ts.forEachChild(node.arguments[1], visit);
+            }
+
+            // 探索が終わったらスタックからpop
+            describeStack.pop();
+            return;
+          }
+        }
+
+        // test, it, test.only, it.only の検出
+        else if (isTestCall(expression)) {
+          const isOnly = isOnlyCall(expression);
+
+          // テスト名を取得（最初の引数が文字列リテラルと想定）
+          if (
+            node.arguments.length > 0 &&
+            ts.isStringLiteral(node.arguments[0])
+          ) {
+            const testName = node.arguments[0].text;
+
+            // 行番号を取得
+            const lineNumber =
+              sourceFile.getLineAndCharacterOfPosition(node.getStart()).line +
+              1;
+
+            // 現在のdescribeパスを取得
+            const currentDescribePath = describeStack.map((d) => d.name);
+
+            // テストケースのfullNameを生成（describeパス + テスト名をスペースで連結）
+            // ここでdescribeパスがあればそれを含めるように修正
+            const fullNameParts = [...currentDescribePath, testName];
+            const fullName = fullNameParts.join(" ");
+
+            // テストケースがdescribe.onlyの中にあるか、test.onlyであるかを判定
+            const hasOnly =
+              isOnly ||
+              describeStack.some((d) => d.hasOnly) ||
+              fileHasDescribeOnly;
+
+            // テストケースを追加
+            testCases.push({
+              name: testName,
+              describePath: currentDescribePath,
+              fullName,
+              lineNumber,
+              hasOnly,
+            });
+          }
         }
       }
 
@@ -119,4 +174,15 @@ function isTestCall(node: ts.Node): boolean {
   }
 
   return false;
+}
+
+/**
+ * ノードが.onlyプロパティアクセスかどうかを判定
+ */
+function isOnlyCall(node: ts.Node): boolean {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.name) &&
+    node.name.text === "only"
+  );
 }
