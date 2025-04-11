@@ -42,6 +42,7 @@ interface TestHistoryData {
 // 履歴ファイルの定数
 const HISTORY_DIR_NAME = "jest-test-selecter";
 const HISTORY_FILE_NAME = "history2.mpack"; // 区別のため名前を変更
+const HISTORY_JSON_FILE_NAME = "history2.json"; // デバッグ用JSONファイル
 
 // パフォーマンス用定数
 const SAVE_DEBOUNCE_TIME = 2000; // 保存のデバウンス時間（ミリ秒）
@@ -64,6 +65,7 @@ export interface TestResultState {
   testResults: Record<string, Record<string, TestResultInfo>>;
   historyDirPath: string | null;
   historyFilePath: string | null;
+  historyJsonFilePath: string | null; // JSONファイルパス
   jsonOutputFilePath: string | null;
   filePathIndex: Map<string, Set<string>>; // ファイルパスによる検索インデックス
   directoryPathIndex: Map<string, Set<string>>; // ディレクトリパスによる検索インデックス
@@ -76,6 +78,7 @@ let currentState: TestResultState = {
   testResults: {},
   historyDirPath: null,
   historyFilePath: null,
+  historyJsonFilePath: null, // JSONファイルパス
   jsonOutputFilePath: null,
   filePathIndex: new Map<string, Set<string>>(),
   directoryPathIndex: new Map<string, Set<string>>(),
@@ -320,14 +323,23 @@ export const initialize = async (
 
     // MessagePack形式の履歴ファイルパス
     const historyFilePath = path.join(historyDirPath, HISTORY_FILE_NAME);
+    // JSON形式の履歴ファイルパス（デバッグ用）
+    const historyJsonFilePath = path.join(
+      historyDirPath,
+      HISTORY_JSON_FILE_NAME
+    );
 
-    updateState({ historyDirPath, historyFilePath });
+    updateState({ historyDirPath, historyFilePath, historyJsonFilePath });
   } catch (error) {
     console.error(
       `[testResultProcessor2] 履歴ディレクトリの初期化に失敗: ${error}`
     );
     // ディレクトリの作成が失敗した場合も、履歴の永続化なしで続行する
-    updateState({ historyDirPath: null, historyFilePath: null });
+    updateState({
+      historyDirPath: null,
+      historyFilePath: null,
+      historyJsonFilePath: null,
+    });
   }
 
   // 2. 既存の履歴を読み込む
@@ -494,6 +506,21 @@ const saveTestResultsToHistory = async (): Promise<void> => {
     // MessagePackにエンコードして保存
     const buffer = codec.encode(historyData);
     await fsp.writeFile(currentState.historyFilePath, buffer);
+
+    // デバッグ用にJSONでも保存
+    if (currentState.historyJsonFilePath) {
+      try {
+        const jsonData = JSON.stringify(historyData, null, 2);
+        await fsp.writeFile(currentState.historyJsonFilePath, jsonData, "utf8");
+        console.log(
+          `[testResultProcessor2] JSONフォーマットでも保存完了: ${currentState.historyJsonFilePath}`
+        );
+      } catch (jsonError) {
+        console.error(
+          `[testResultProcessor2] JSON形式での保存に失敗: ${jsonError}`
+        );
+      }
+    }
 
     // 結果数をカウント
     let resultCount = 0;

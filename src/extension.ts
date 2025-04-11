@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
+import * as decorationProvider from "./decorationProvider";
 import { onlyDetector, registerOnlyDetectionFeatures } from "./onlyDetector";
 import { extractTestCases } from "./testExtractor";
 import * as testResultProcessor from "./testResultProcessor2";
+import { onTestResultsUpdated } from "./testResultProcessor2";
 import { runTestsAtScope, TestScope } from "./testRunner";
 import { TestSettingsProvider } from "./testSettingsView";
 import { TestTreeDataProvider, TestTreeItem } from "./testTreeDataProvider";
@@ -432,6 +434,43 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     disposables.push(onlyDetectDisposable);
 
+    // Decoration Providerのリソース破棄登録
+    context.subscriptions.push({ dispose: () => decorationProvider.dispose() });
+
+    // アクティブなテキストエディタが変更されたとき
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        // 新しいエディタに対してDecorationを更新
+        decorationProvider.updateDecorations(editor);
+      })
+    );
+
+    // テスト結果が更新されたとき
+    context.subscriptions.push(
+      onTestResultsUpdated(() => {
+        // 現在アクティブなエディタのDecorationを更新
+        decorationProvider.updateDecorations(vscode.window.activeTextEditor);
+      })
+    );
+
+    // テキストドキュメントが保存されたとき
+    context.subscriptions.push(
+      vscode.workspace.onDidSaveTextDocument((document) => {
+        // 保存されたドキュメントが現在アクティブなエディタのものであればDecorationを更新
+        if (
+          vscode.window.activeTextEditor &&
+          vscode.window.activeTextEditor.document === document
+        ) {
+          decorationProvider.updateDecorations(vscode.window.activeTextEditor);
+        }
+      })
+    );
+
+    // 拡張機能有効化時に、すでにアクティブなエディタがあればDecorationを適用
+    if (vscode.window.activeTextEditor) {
+      decorationProvider.updateDecorations(vscode.window.activeTextEditor);
+    }
+
     // 全てのディスポーザブルをコンテキストに追加
     disposables.forEach((disposable) => {
       context.subscriptions.push(disposable);
@@ -448,7 +487,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const activationEndTime = Date.now();
   console.log(
-    `Jest Test Selector 拡張機能の有効化完了 (${
+    `Jest Test Selector 拡張機能の有効化が完了しました (${
       activationEndTime - activationStartTime
     }ms)`
   );
@@ -457,5 +496,6 @@ export async function activate(context: vscode.ExtensionContext) {
 // 拡張機能が無効化されたときに実行される関数
 export function deactivate() {
   console.log("Jest Test Selector 拡張機能を無効化");
-  // クリーンアップロジック（必要であれば）
+  // 拡張機能が無効化されるときにすべてのDecorationをクリア
+  decorationProvider.clearAllDecorations();
 }
