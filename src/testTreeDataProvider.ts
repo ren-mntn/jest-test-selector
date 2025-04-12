@@ -68,8 +68,8 @@ export class TestTreeItem extends vscode.TreeItem {
               filePath
             )} [テスト失敗あり]`;
           } else {
-            // それ以外の場合は通常のフォルダアイコン
-            this.iconPath = new vscode.ThemeIcon("folder");
+            // それ以外の場合は通常のファイルアイコン
+            this.iconPath = new vscode.ThemeIcon("file");
             this.tooltip = `ファイル: ${path.basename(filePath)}`;
           }
         } else {
