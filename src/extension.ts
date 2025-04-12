@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as decorationProvider from "./decorationProvider";
 import * as testResultProcessor from "./testResultProcessor2";
+import { onTestResultsUpdated } from "./testResultProcessor2";
 import { runTestsAtScope, TestScope } from "./testRunner";
 import { TestSettingsProvider } from "./testSettingsView";
 import { TestTreeDataProvider, TestTreeItem } from "./testTreeDataProvider";
@@ -407,11 +408,23 @@ export async function activate(context: vscode.ExtensionContext) {
       (event) => {
         const editor = vscode.window.activeTextEditor;
         if (editor && event.document === editor.document) {
-          // updateOnlyDecorations(editor);
+          // デコレーションの更新処理を行う可能性がある場所
         }
       }
     );
     disposables.push(textChangeDisposable);
+
+    // テスト結果更新リスナーを登録
+    console.log("テスト結果更新リスナーを登録しています...");
+    context.subscriptions.push(
+      onTestResultsUpdated(() => {
+        // 現在アクティブなエディタのDecorationを更新
+        decorationProvider.updateDecorations(vscode.window.activeTextEditor);
+      })
+    );
+
+    // 現在のエディタにデコレーションを適用
+    decorationProvider.updateDecorations(vscode.window.activeTextEditor);
 
     // Decoration Providerのリソース破棄登録
     context.subscriptions.push({ dispose: () => decorationProvider.dispose() });
@@ -421,14 +434,6 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         // 新しいエディタに対してDecorationを更新
         decorationProvider.updateDecorations(editor);
-      })
-    );
-
-    // テスト結果が更新されたとき
-    context.subscriptions.push(
-      testResultProcessor.onTestResultsUpdated(() => {
-        // 現在アクティブなエディタのDecorationを更新
-        decorationProvider.updateDecorations(vscode.window.activeTextEditor);
       })
     );
 

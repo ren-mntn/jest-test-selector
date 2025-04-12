@@ -1,8 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { TestCase, extractTestCases } from "./testExtractor";
+import { extractTestCases, TestCase } from "./testExtractor";
 import * as testResultProcessor from "./testResultProcessor2";
-import { TestResultStatus, onTestResultsUpdated } from "./testResultProcessor2";
+import { onTestResultsUpdated, TestResultStatus } from "./testResultProcessor2";
 import { isTestFile } from "./testUtils";
 
 /**
@@ -13,6 +13,17 @@ export type TestItemType =
   | "describe" // describeブロック
   | "testCase" // 個別のテストケース
   | "packageAllTests"; // パッケージのすべてのテスト実行
+
+/**
+ * テストデータノード
+ */
+interface TestNode {
+  name: string;
+  type: TestItemType;
+  filePath: string;
+  children: TestNode[];
+  testCase?: TestCase;
+}
 
 /**
  * TreeViewアイテムのクラス
@@ -334,17 +345,6 @@ export class TestTreeItem extends vscode.TreeItem {
 }
 
 /**
- * テストデータノード
- */
-interface TestNode {
-  name: string;
-  type: TestItemType;
-  filePath: string;
-  children: TestNode[];
-  testCase?: TestCase;
-}
-
-/**
  * テストツリーデータプロバイダ
  * VSCodeのTreeDataProviderインターフェースを実装
  */
@@ -409,6 +409,81 @@ export class TestTreeDataProvider
   }
 
   /**
+   * ツリーアイテムを取得
+   */
+  public getTreeItem(element: TestTreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  /**
+   * 指定された要素の子ノードを取得
+   * @param element 親要素。未指定の場合はルートレベルの要素を返す
+   */
+  public async getChildren(element?: TestTreeItem): Promise<TestTreeItem[]> {
+    if (!element) {
+      // ルートレベルの要素
+      return this.rootNodes.map((node) => {
+        return new TestTreeItem(
+          node.name,
+          node.children.length > 0
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.None,
+          node.type,
+          node.filePath,
+          isTestFile(node.filePath),
+          node.testCase
+        );
+      });
+    }
+
+    // 子要素を取得
+    const filePath = element.filePath;
+
+    // elementに対応するノードを検索
+    const findNode = (
+      nodes: TestNode[],
+      label: string,
+      type: TestItemType
+    ): TestNode | undefined => {
+      for (const node of nodes) {
+        if (node.name === label && node.type === type) {
+          return node;
+        }
+
+        const found = findNode(node.children, label, type);
+        if (found) {
+          return found;
+        }
+      }
+      return undefined;
+    };
+
+    const node = findNode(this.rootNodes, element.label, element.type);
+    if (!node) {
+      return Promise.resolve([]);
+    }
+
+    // 子ノードをツリーアイテムに変換して返す
+    return Promise.resolve(
+      node.children.map((child) => {
+        const collapsibleState =
+          child.children.length > 0
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.None;
+
+        return new TestTreeItem(
+          child.name,
+          collapsibleState,
+          child.type,
+          child.filePath,
+          isTestFile(child.filePath),
+          child.testCase
+        );
+      })
+    );
+  }
+
+  /**
    * ルートレベルのノードを構築
    * @returns ルートノードの配列
    */
@@ -416,65 +491,6 @@ export class TestTreeDataProvider
     // ルートノード配列を作成（空の配列）
     const rootNodes: TestNode[] = [];
     return rootNodes;
-  }
-
-  /**
-   * 実装ファイルに対応するテストファイルのパスを取得
-   * @param filePath 実装ファイルのパス
-   * @returns 対応するテストファイルのパス（存在する場合）、または null
-   */
-  private async findCorrespondingTestFile(
-    filePath: string
-  ): Promise<string | null> {
-    // 既にテストファイルの場合はそのまま返す
-    if (isTestFile(filePath)) {
-      return filePath;
-    }
-
-    // ファイル名と拡張子を取得
-    const ext = path.extname(filePath);
-    const fileNameWithoutExt = path.basename(filePath, ext);
-    const dir = path.dirname(filePath);
-
-    // 想定されるテストファイル名を生成
-    const testFileName = `${fileNameWithoutExt}.test${ext}`;
-    const testFilePath = path.join(dir, testFileName);
-
-    // ファイルが存在するか確認
-    try {
-      await vscode.workspace.fs.stat(vscode.Uri.file(testFilePath));
-      return testFilePath;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 指定されたディレクトリ内のすべてのテストファイルを検索
-   * @param dirPath ディレクトリのパス
-   * @returns テストファイルのパスの配列
-   */
-  private async findAllTestFilesInDirectory(
-    dirPath: string
-  ): Promise<string[]> {
-    try {
-      // ディレクトリ内のファイルを取得
-      const entries = await vscode.workspace.fs.readDirectory(
-        vscode.Uri.file(dirPath)
-      );
-
-      // テストファイルをフィルタリング
-      const testFiles = entries
-        .filter(([name, type]) => {
-          return type === vscode.FileType.File && isTestFile(name);
-        })
-        .map(([name]) => path.join(dirPath, name));
-
-      return testFiles;
-    } catch (error) {
-      console.error(`ディレクトリの読み取りエラー: ${dirPath}`, error);
-      return [];
-    }
   }
 
   /**
@@ -580,99 +596,6 @@ export class TestTreeDataProvider
   }
 
   /**
-   * テストツリーを更新
-   */
-  public async refresh(): Promise<void> {
-    try {
-      // ルートノードを初期化
-      this.rootNodes = this.buildRootNodes();
-
-      // 現在アクティブなエディタを取得
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        // エディタが開かれていない場合は空のツリーを表示
-        this._onDidChangeTreeData.fire();
-        return;
-      }
-
-      const filePath = editor.document.uri.fsPath;
-      this.lastActiveFilePath = filePath;
-
-      const currentDirPath = path.dirname(filePath);
-
-      // Jest設定ファイルのあるパッケージディレクトリを検索
-      const packageInfo = await this.findPackageDirectoryWithJestConfig(
-        filePath
-      );
-
-      // ディレクトリ内のすべてのテストファイルを検索
-      const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
-
-      if (testFiles.length > 0) {
-        // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
-        if (
-          this.lastActiveFilePath === currentDirPath &&
-          this.rootNodes.length > 1 &&
-          this.rootNodes[1].name === `${path.basename(currentDirPath)}`
-        ) {
-          return;
-        }
-
-        // ディレクトリパスを保存（区別のため）
-        this.lastActiveFilePath = currentDirPath;
-
-        // ディレクトリベースのツリーを構築
-        await this.buildDirectoryTestTree(currentDirPath, testFiles);
-
-        // パッケージ情報が見つかった場合、パッケージノードを追加
-        if (packageInfo) {
-          this.addPackageTestNode(packageInfo);
-        }
-
-        this._onDidChangeTreeData.fire();
-        return;
-      }
-
-      // テストファイルを特定
-      let testFilePath: string | null = null;
-
-      if (isTestFile(filePath)) {
-        // 現在のファイルがテストファイルの場合はそのまま使用
-        testFilePath = filePath;
-      } else {
-        // 実装ファイルの場合は対応するテストファイルを探す
-        testFilePath = await this.findCorrespondingTestFile(filePath);
-      }
-
-      // テストファイルが見つからない場合は何もしない
-      if (!testFilePath) {
-        return;
-      }
-
-      // 現在のファイルが前回と同じ場合は不要な更新をスキップ
-      if (
-        this.lastActiveFilePath === testFilePath &&
-        this.rootNodes.length > 0 &&
-        this.rootNodes[0].type === "file" &&
-        this.rootNodes[0].name === path.basename(testFilePath)
-      ) {
-        return;
-      }
-
-      // テストファイルのパスを保存
-      this.lastActiveFilePath = testFilePath;
-
-      // ツリーデータをリフレッシュ
-      this.rootNodes = [];
-      await this.buildTestTree(this.lastActiveFilePath);
-
-      this._onDidChangeTreeData.fire();
-    } catch (error) {
-      console.error("テストツリーの更新に失敗しました:", error);
-    }
-  }
-
-  /**
    * テストファイルからツリー構造を構築
    */
   private async buildTestTree(filePath: string): Promise<void> {
@@ -754,85 +677,62 @@ export class TestTreeDataProvider
   }
 
   /**
-   * テストファイルかどうかを判定
+   * 実装ファイルに対応するテストファイルのパスを取得
+   * @param filePath 実装ファイルのパス
+   * @returns 対応するテストファイルのパス（存在する場合）、または null
    */
-  public isTestFile(filePath: string): boolean {
-    return isTestFile(filePath);
+  private async findCorrespondingTestFile(
+    filePath: string
+  ): Promise<string | null> {
+    // 既にテストファイルの場合はそのまま返す
+    if (isTestFile(filePath)) {
+      return filePath;
+    }
+
+    // ファイル名と拡張子を取得
+    const ext = path.extname(filePath);
+    const fileNameWithoutExt = path.basename(filePath, ext);
+    const dir = path.dirname(filePath);
+
+    // 想定されるテストファイル名を生成
+    const testFileName = `${fileNameWithoutExt}.test${ext}`;
+    const testFilePath = path.join(dir, testFileName);
+
+    // ファイルが存在するか確認
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(testFilePath));
+      return testFilePath;
+    } catch {
+      return null;
+    }
   }
 
   /**
-   * 指定された要素の子ノードを取得
-   * @param element 親要素。未指定の場合はルートレベルの要素を返す
+   * 指定されたディレクトリ内のすべてのテストファイルを検索
+   * @param dirPath ディレクトリのパス
+   * @returns テストファイルのパスの配列
    */
-  public async getChildren(element?: TestTreeItem): Promise<TestTreeItem[]> {
-    if (!element) {
-      // ルートレベルの要素
-      return this.rootNodes.map((node) => {
-        return new TestTreeItem(
-          node.name,
-          node.children.length > 0
-            ? vscode.TreeItemCollapsibleState.Expanded
-            : vscode.TreeItemCollapsibleState.None,
-          node.type,
-          node.filePath,
-          isTestFile(node.filePath),
-          node.testCase
-        );
-      });
+  private async findAllTestFilesInDirectory(
+    dirPath: string
+  ): Promise<string[]> {
+    try {
+      // ディレクトリ内のファイルを取得
+      const entries = await vscode.workspace.fs.readDirectory(
+        vscode.Uri.file(dirPath)
+      );
+
+      // テストファイルをフィルタリング
+      const testFiles = entries
+        .filter(([name, type]) => {
+          return type === vscode.FileType.File && isTestFile(name);
+        })
+        .map(([name]) => path.join(dirPath, name));
+
+      return testFiles;
+    } catch (error) {
+      console.error(`ディレクトリの読み取りエラー: ${dirPath}`, error);
+      return [];
     }
-
-    // 子要素を取得
-    const filePath = element.filePath;
-
-    // elementに対応するノードを検索
-    const findNode = (
-      nodes: TestNode[],
-      label: string,
-      type: TestItemType
-    ): TestNode | undefined => {
-      for (const node of nodes) {
-        if (node.name === label && node.type === type) {
-          return node;
-        }
-
-        const found = findNode(node.children, label, type);
-        if (found) {
-          return found;
-        }
-      }
-      return undefined;
-    };
-
-    const node = findNode(this.rootNodes, element.label, element.type);
-    if (!node) {
-      return Promise.resolve([]);
-    }
-
-    // 子ノードをツリーアイテムに変換して返す
-    return Promise.resolve(
-      node.children.map((child) => {
-        const collapsibleState =
-          child.children.length > 0
-            ? vscode.TreeItemCollapsibleState.Expanded
-            : vscode.TreeItemCollapsibleState.None;
-
-        return new TestTreeItem(
-          child.name,
-          collapsibleState,
-          child.type,
-          child.filePath,
-          isTestFile(child.filePath),
-          child.testCase
-        );
-      })
-    );
-  }
-
-  /**
-   * ツリーアイテムを取得
-   */
-  public getTreeItem(element: TestTreeItem): vscode.TreeItem {
-    return element;
   }
 
   /**
@@ -943,13 +843,108 @@ export class TestTreeDataProvider
   }
 
   /**
-   * 単一のテストファイルの内容を更新
+   * テストツリーを更新
+   */
+  public async refresh(): Promise<void> {
+    try {
+      // ルートノードを初期化
+      this.rootNodes = this.buildRootNodes();
+
+      // 現在アクティブなエディタを取得
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        // エディタが開かれていない場合は空のツリーを表示
+        this._onDidChangeTreeData.fire();
+        return;
+      }
+
+      const filePath = editor.document.uri.fsPath;
+      this.lastActiveFilePath = filePath;
+
+      const currentDirPath = path.dirname(filePath);
+
+      // Jest設定ファイルのあるパッケージディレクトリを検索
+      const packageInfo = await this.findPackageDirectoryWithJestConfig(
+        filePath
+      );
+
+      // ディレクトリ内のすべてのテストファイルを検索
+      const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
+
+      if (testFiles.length > 0) {
+        // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
+        if (
+          this.lastActiveFilePath === currentDirPath &&
+          this.rootNodes.length > 1 &&
+          this.rootNodes[1].name === `${path.basename(currentDirPath)}`
+        ) {
+          return;
+        }
+
+        // ディレクトリパスを保存（区別のため）
+        this.lastActiveFilePath = currentDirPath;
+
+        // ディレクトリベースのツリーを構築
+        await this.buildDirectoryTestTree(currentDirPath, testFiles);
+
+        // パッケージ情報が見つかった場合、パッケージノードを追加
+        if (packageInfo) {
+          this.addPackageTestNode(packageInfo);
+        }
+
+        this._onDidChangeTreeData.fire();
+        return;
+      }
+
+      // テストファイルを特定
+      let testFilePath: string | null = null;
+
+      if (isTestFile(filePath)) {
+        // 現在のファイルがテストファイルの場合はそのまま使用
+        testFilePath = filePath;
+      } else {
+        // 実装ファイルの場合は対応するテストファイルを探す
+        testFilePath = await this.findCorrespondingTestFile(filePath);
+      }
+
+      // テストファイルが見つからない場合は何もしない
+      if (!testFilePath) {
+        return;
+      }
+
+      // 現在のファイルが前回と同じ場合は不要な更新をスキップ
+      if (
+        this.lastActiveFilePath === testFilePath &&
+        this.rootNodes.length > 0 &&
+        this.rootNodes[0].type === "file" &&
+        this.rootNodes[0].name === path.basename(testFilePath)
+      ) {
+        return;
+      }
+
+      // テストファイルのパスを保存
+      this.lastActiveFilePath = testFilePath;
+
+      // ツリーデータをリフレッシュ
+      this.rootNodes = [];
+      await this.buildTestTree(this.lastActiveFilePath);
+
+      this._onDidChangeTreeData.fire();
+    } catch (error) {
+      console.error("テストツリーの更新に失敗しました:", error);
+    }
+  }
+
+  /**
+   * ファイルからテストツリーを更新
    */
   private async updateTestFile(filePath: string): Promise<void> {
     try {
-      console.log(
-        `[updateTestFile] Triggered for ${filePath}, but update delegated.`
-      ); // 処理を委譲したことをログに残す
+      // テストツリーを更新（現在のファイルがこのファイルの場合のみ）
+      if (this.lastActiveFilePath === filePath) {
+        await this.buildTestTree(filePath);
+        this._onDidChangeTreeData.fire();
+      }
     } catch (error) {
       console.error(`テストファイル更新エラー: ${filePath}`, error);
     }
