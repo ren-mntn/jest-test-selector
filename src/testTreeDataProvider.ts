@@ -397,6 +397,10 @@ export class TestTreeDataProvider
     await this.refresh();
   }, 300); // 300ms以内の連続したイベントをまとめる
 
+  // 変更されたノードを追跡するための変数を追加
+  private changedNodes: Set<string> = new Set();
+  private nodeItemCache: Map<string, TestTreeItem> = new Map();
+
   constructor() {
     // アクティブエディタの変更を監視 - debounce処理を追加
     this.disposables.push(
@@ -443,6 +447,87 @@ export class TestTreeDataProvider
   }
 
   /**
+   * ノードキーからTreeItemを検索
+   * @param nodeKey ノードキー
+   * @returns 見つかったTreeItemまたはundefined
+   */
+  private findTreeItemByNodeKey(nodeKey: string): TestTreeItem | undefined {
+    return this.nodeItemCache.get(nodeKey);
+  }
+
+  /**
+   * ノードの変更を通知する
+   * @param changedNodeKeys 変更されたノードのキーの配列
+   */
+  private notifyNodesChanged(changedNodeKeys: string[]): void {
+    if (changedNodeKeys.length === 0) {
+      // 変更がない場合は何もしない
+      return;
+    }
+
+    if (changedNodeKeys.length > 10) {
+      // 変更が多すぎる場合は全体更新
+      this._onDidChangeTreeData.fire();
+      return;
+    }
+
+    // 変更されたノードを特定し個別に更新
+    const affectedItems = changedNodeKeys
+      .map((key) => this.findTreeItemByNodeKey(key))
+      .filter((item): item is TestTreeItem => item !== undefined);
+
+    if (affectedItems.length === 0) {
+      // 対応するアイテムが見つからない場合は全体更新
+      this._onDidChangeTreeData.fire();
+      return;
+    }
+
+    // 各ノードの更新を通知
+    affectedItems.forEach((item) => {
+      this._onDidChangeTreeData.fire(item);
+    });
+  }
+
+  /**
+   * 全てのツリーアイテムをキャッシュに保存
+   */
+  private cacheAllTreeItems(): void {
+    // キャッシュをクリア
+    this.nodeItemCache.clear();
+
+    // ツリーアイテムを生成して保存する関数
+    const createAndCacheTreeItems = (nodes: TestNode[]): TestTreeItem[] => {
+      return nodes.map((node) => {
+        // ノードのキーを生成
+        const nodeKey = `${node.filePath}#${node.type}#${node.name}`;
+
+        // ツリーアイテムを作成
+        const treeItem = new TestTreeItem(
+          node.name,
+          node.children.length > 0
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.None,
+          node.type,
+          node.filePath,
+          isTestFile(node.filePath),
+          node.testCase
+        );
+
+        // キャッシュに保存
+        this.nodeItemCache.set(nodeKey, treeItem);
+
+        // 子ノードも処理
+        createAndCacheTreeItems(node.children);
+
+        return treeItem;
+      });
+    };
+
+    // ルートノードから処理開始
+    createAndCacheTreeItems(this.rootNodes);
+  }
+
+  /**
    * ツリーアイテムを取得
    */
   public getTreeItem(element: TestTreeItem): vscode.TreeItem {
@@ -455,9 +540,10 @@ export class TestTreeDataProvider
    */
   public async getChildren(element?: TestTreeItem): Promise<TestTreeItem[]> {
     if (!element) {
-      // ルートレベルの要素
-      return this.rootNodes.map((node) => {
-        return new TestTreeItem(
+      // ルートレベルの要素を返す前にキャッシュを更新
+      const rootItems = this.rootNodes.map((node) => {
+        const nodeKey = `${node.filePath}#${node.type}#${node.name}`;
+        const treeItem = new TestTreeItem(
           node.name,
           node.children.length > 0
             ? vscode.TreeItemCollapsibleState.Expanded
@@ -467,7 +553,14 @@ export class TestTreeDataProvider
           isTestFile(node.filePath),
           node.testCase
         );
+
+        // キャッシュに保存
+        this.nodeItemCache.set(nodeKey, treeItem);
+
+        return treeItem;
       });
+
+      return rootItems;
     }
 
     // 子要素を取得
@@ -500,12 +593,13 @@ export class TestTreeDataProvider
     // 子ノードをツリーアイテムに変換して返す
     return Promise.resolve(
       node.children.map((child) => {
+        const nodeKey = `${child.filePath}#${child.type}#${child.name}`;
         const collapsibleState =
           child.children.length > 0
             ? vscode.TreeItemCollapsibleState.Expanded
             : vscode.TreeItemCollapsibleState.None;
 
-        return new TestTreeItem(
+        const treeItem = new TestTreeItem(
           child.name,
           collapsibleState,
           child.type,
@@ -513,6 +607,11 @@ export class TestTreeDataProvider
           isTestFile(child.filePath),
           child.testCase
         );
+
+        // キャッシュに保存
+        this.nodeItemCache.set(nodeKey, treeItem);
+
+        return treeItem;
       })
     );
   }
@@ -895,8 +994,9 @@ export class TestTreeDataProvider
 
       // 差分更新: 同じファイルの場合はスキップ
       if (this.lastActiveFilePath === filePath && this.rootNodes.length > 0) {
-        // テスト結果のみが変わった可能性があるので、UI更新だけ行う
-        this._onDidChangeTreeData.fire();
+        // テスト結果のみが変わった可能性があるので、部分更新を行う
+        const changedNodeKeys = this.updateNodeStatus();
+        this.notifyNodesChanged(changedNodeKeys);
         return;
       }
 
@@ -906,9 +1006,8 @@ export class TestTreeDataProvider
       // 前回と同じディレクトリ/ファイルかつツリーが構築済みの場合
       if (this.lastActiveFilePath === cacheKey && this.rootNodes.length > 0) {
         // 差分更新のために部分的に更新
-        this.updateNodeStatus();
-        // 部分的な更新を反映
-        this._onDidChangeTreeData.fire();
+        const changedNodeKeys = this.updateNodeStatus();
+        this.notifyNodesChanged(changedNodeKeys);
         return;
       }
 
@@ -942,6 +1041,9 @@ export class TestTreeDataProvider
         // 現在のノード状態を保存
         this.saveNodeState();
 
+        // ツリーアイテムをキャッシュ
+        this.cacheAllTreeItems();
+
         // 全体を更新
         this._onDidChangeTreeData.fire();
         return;
@@ -967,6 +1069,9 @@ export class TestTreeDataProvider
       // 現在のノード状態を保存
       this.saveNodeState();
 
+      // ツリーアイテムをキャッシュ
+      this.cacheAllTreeItems();
+
       // 変更を通知（全体更新）
       this._onDidChangeTreeData.fire();
     } catch (error) {
@@ -978,6 +1083,9 @@ export class TestTreeDataProvider
    * 現在のノード状態を保存
    */
   private saveNodeState(): void {
+    // 変更されたノードのキーをクリア
+    this.changedNodes.clear();
+
     // 新しいMapを作成
     const newState = new Map<string, TestNode>();
 
@@ -991,6 +1099,18 @@ export class TestTreeDataProvider
 
         // ノードのキーを作成（ファイルパス + 名前 + タイプで一意に識別）
         const nodeKey = `${node.filePath}#${node.type}#${node.name}`;
+
+        // 前回の状態と比較して変更を検出
+        const previousNode = this.previousNodeState.get(nodeKey);
+        const hasChanged =
+          !previousNode ||
+          JSON.stringify(previousNode) !==
+            JSON.stringify({ ...node, children: [] });
+
+        if (hasChanged) {
+          // 変更があった場合は変更リストに追加
+          this.changedNodes.add(nodeKey);
+        }
 
         // ノードの状態を保存
         newState.set(nodeKey, { ...node, children: [] });
@@ -1009,8 +1129,12 @@ export class TestTreeDataProvider
 
   /**
    * ノードのステータスを更新
+   * @returns 変更されたノードキーの配列
    */
-  private updateNodeStatus(): void {
+  private updateNodeStatus(): string[] {
+    // 変更されたノードのキーを格納する配列
+    const changedNodeKeys: string[] = [];
+
     // ノードのステータスのみを更新する処理
     const updateNodeStatusRecursively = (nodes: TestNode[]): void => {
       // 各ノードを処理
@@ -1021,6 +1145,25 @@ export class TestTreeDataProvider
         // 前回のノード状態から現在のノードのキーを検索
         const previousNode = this.previousNodeState.get(nodeKey);
 
+        // テスト結果の変化を確認
+        if (node.type === "testCase" && node.testCase) {
+          const testResult = testResultProcessor.getTestResult(
+            node.filePath,
+            node.testCase.fullName
+          );
+
+          // 結果が変わっていれば変更としてマーク
+          if (testResult) {
+            changedNodeKeys.push(nodeKey);
+          }
+        } else if (node.type === "file" && isTestFile(node.filePath)) {
+          // ファイルのテスト結果ステータスをチェック
+          const fileStatus = this.checkFileTestStatus(node.filePath);
+          if (fileStatus !== "unknown") {
+            changedNodeKeys.push(nodeKey);
+          }
+        }
+
         // 子ノードも再帰的に処理
         updateNodeStatusRecursively(node.children);
       });
@@ -1028,6 +1171,79 @@ export class TestTreeDataProvider
 
     // ルートノードから更新処理を開始
     updateNodeStatusRecursively(this.rootNodes);
+
+    return changedNodeKeys;
+  }
+
+  /**
+   * 指定されたファイルのテスト結果のステータスをチェック
+   * @param filePath ファイルパス
+   * @returns "success" - すべてのテストが成功, "failure" - 失敗したテストあり, "unknown" - テスト結果なし
+   */
+  private checkFileTestStatus(
+    filePath: string
+  ): "success" | "failure" | "unknown" {
+    try {
+      // ファイルパスが有効であることを確認
+      if (!filePath || !isTestFile(filePath)) {
+        return "unknown";
+      }
+
+      // テスト結果を取得
+      const allResults = testResultProcessor.getAllTestResults();
+      const filePathIndex = testResultProcessor.getFilePathIndex();
+
+      if (Object.keys(allResults).length === 0) {
+        return "unknown"; // テスト結果がない場合
+      }
+
+      // このファイルに関連するテスト結果を抽出
+      const normalizedPath = path.normalize(filePath);
+      const baseNameOnly = path.basename(filePath);
+
+      // インデックスからファイルに関連するキーを取得
+      const relatedKeys = new Set<string>();
+
+      // 正規化されたパスでインデックスから検索
+      const pathKeys = filePathIndex.get(normalizedPath);
+      if (pathKeys) {
+        pathKeys.forEach((key) => relatedKeys.add(key));
+      }
+
+      // ファイル名のみでもインデックスから検索
+      const baseNameKeys = filePathIndex.get(baseNameOnly);
+      if (baseNameKeys) {
+        baseNameKeys.forEach((key) => relatedKeys.add(key));
+      }
+
+      // 関連するキーが見つからない場合は未知の状態を返す
+      if (relatedKeys.size === 0) {
+        return "unknown";
+      }
+
+      // インデックスから取得したキーを使用してテスト結果をチェック
+      let hasFailedTests = false;
+
+      for (const key of relatedKeys) {
+        const separatorIndex = key.lastIndexOf("#");
+        if (separatorIndex !== -1) {
+          const filePath = key.substring(0, separatorIndex);
+          const testName = key.substring(separatorIndex + 1);
+          const result = allResults[filePath]?.[testName];
+
+          if (result && result.status === TestResultStatus.Failure) {
+            hasFailedTests = true;
+            break;
+          }
+        }
+      }
+
+      // 関連するテスト結果が見つかり、すべて成功していればsuccess
+      return hasFailedTests ? "failure" : "success";
+    } catch (error) {
+      console.error("テスト結果チェック中にエラーが発生:", error);
+      return "unknown";
+    }
   }
 
   /**
@@ -1042,8 +1258,12 @@ export class TestTreeDataProvider
         // 現在のノード状態を保存
         this.saveNodeState();
 
-        // 変更があった部分のみを更新
-        this._onDidChangeTreeData.fire();
+        // ツリーアイテムをキャッシュ
+        this.cacheAllTreeItems();
+
+        // 変更があったノードのみを更新
+        const changedNodeKeys = Array.from(this.changedNodes);
+        this.notifyNodesChanged(changedNodeKeys);
       }
     } catch (error) {
       console.error(`テストファイル更新エラー: ${filePath}`, error);
