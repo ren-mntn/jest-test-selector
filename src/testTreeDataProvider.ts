@@ -344,6 +344,26 @@ export class TestTreeItem extends vscode.TreeItem {
   }
 }
 
+// debounce関数の実装（関数型スタイル）
+const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout | null = null;
+
+  return (...args: Parameters<T>): void => {
+    const later = () => {
+      timeout = null;
+      func(...args);
+    };
+
+    if (timeout !== null) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(later, wait);
+  };
+};
+
 /**
  * テストツリーデータプロバイダ
  * VSCodeのTreeDataProviderインターフェースを実装
@@ -366,38 +386,52 @@ export class TestTreeDataProvider
     [key: string]: { path: string; name: string };
   } = {};
 
+  // 前回のノード状態を保存する変数を追加
+  private previousNodeState: Map<string, TestNode> = new Map();
+
   // イベントリスナーのディスポーザブル
   private disposables: vscode.Disposable[] = [];
 
+  // debouncedRefresh関数を作成
+  private debouncedRefresh = debounce(async () => {
+    await this.refresh();
+  }, 300); // 300ms以内の連続したイベントをまとめる
+
   constructor() {
-    // アクティブエディタの変更を監視
+    // アクティブエディタの変更を監視 - debounce処理を追加
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor && isTestFile(editor.document.uri.fsPath)) {
-          this.refresh();
+          this.debouncedRefresh();
         }
       })
     );
 
-    // テスト結果が更新されたときにツリービューを更新
+    // テスト結果が更新されたときにツリービューを更新 - debounce処理を追加
     this.disposables.push(
       onTestResultsUpdated(() => {
         console.log("テスト結果更新を検知、ツリービューを更新します");
-        this.refresh();
+        this.debouncedRefresh();
       })
     );
 
-    // テキスト変更リスナーを追加
+    // テキスト変更リスナーを追加 - debounce処理を追加
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((event) => {
         const filePath = event.document.uri.fsPath;
         // テストファイルの変更を検出したら更新
         if (isTestFile(filePath)) {
-          this.updateTestFile(filePath);
+          this.debouncedUpdateTestFile(filePath);
         }
       })
     );
   }
+
+  // debouncedUpdateTestFile関数を作成
+  private debouncedUpdateTestFile = debounce(
+    (filePath: string) => this.updateTestFile(filePath),
+    300
+  );
 
   /**
    * リソースの破棄
@@ -847,23 +881,45 @@ export class TestTreeDataProvider
    */
   public async refresh(): Promise<void> {
     try {
-      // ルートノードを初期化
-      this.rootNodes = this.buildRootNodes();
-
       // 現在アクティブなエディタを取得
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
         // エディタが開かれていない場合は空のツリーを表示
+        this.rootNodes = this.buildRootNodes();
         this._onDidChangeTreeData.fire();
         return;
       }
 
       const filePath = editor.document.uri.fsPath;
-      this.lastActiveFilePath = filePath;
-
       const currentDirPath = path.dirname(filePath);
 
-      // Jest設定ファイルのあるパッケージディレクトリを検索
+      // 差分更新: 同じファイルの場合はスキップ
+      if (this.lastActiveFilePath === filePath && this.rootNodes.length > 0) {
+        // テスト結果のみが変わった可能性があるので、UI更新だけ行う
+        this._onDidChangeTreeData.fire();
+        return;
+      }
+
+      // キャッシュキーの作成
+      const cacheKey = isTestFile(filePath) ? filePath : currentDirPath;
+
+      // 前回と同じディレクトリ/ファイルかつツリーが構築済みの場合
+      if (this.lastActiveFilePath === cacheKey && this.rootNodes.length > 0) {
+        // 差分更新のために部分的に更新
+        this.updateNodeStatus();
+        // 部分的な更新を反映
+        this._onDidChangeTreeData.fire();
+        return;
+      }
+
+      // 新しいファイル/ディレクトリの場合は前回のパスを更新
+      this.lastActiveFilePath = filePath;
+
+      // 新しいツリーを構築するための準備
+      // ルートノードを初期化
+      const newRootNodes = this.buildRootNodes();
+
+      // パッケージディレクトリ情報を取得
       const packageInfo = await this.findPackageDirectoryWithJestConfig(
         filePath
       );
@@ -872,19 +928,10 @@ export class TestTreeDataProvider
       const testFiles = await this.findAllTestFilesInDirectory(currentDirPath);
 
       if (testFiles.length > 0) {
-        // ディレクトリ内に複数のテストファイルがある場合はディレクトリモードで表示
-        if (
-          this.lastActiveFilePath === currentDirPath &&
-          this.rootNodes.length > 1 &&
-          this.rootNodes[1].name === `${path.basename(currentDirPath)}`
-        ) {
-          return;
-        }
-
-        // ディレクトリパスを保存（区別のため）
+        // ディレクトリモードでの表示処理
         this.lastActiveFilePath = currentDirPath;
 
-        // ディレクトリベースのツリーを構築
+        // 新しいディレクトリツリーを構築
         await this.buildDirectoryTestTree(currentDirPath, testFiles);
 
         // パッケージ情報が見つかった場合、パッケージノードを追加
@@ -892,33 +939,21 @@ export class TestTreeDataProvider
           this.addPackageTestNode(packageInfo);
         }
 
+        // 現在のノード状態を保存
+        this.saveNodeState();
+
+        // 全体を更新
         this._onDidChangeTreeData.fire();
         return;
       }
 
       // テストファイルを特定
-      let testFilePath: string | null = null;
-
-      if (isTestFile(filePath)) {
-        // 現在のファイルがテストファイルの場合はそのまま使用
-        testFilePath = filePath;
-      } else {
-        // 実装ファイルの場合は対応するテストファイルを探す
-        testFilePath = await this.findCorrespondingTestFile(filePath);
-      }
+      const testFilePath = isTestFile(filePath)
+        ? filePath
+        : await this.findCorrespondingTestFile(filePath);
 
       // テストファイルが見つからない場合は何もしない
       if (!testFilePath) {
-        return;
-      }
-
-      // 現在のファイルが前回と同じ場合は不要な更新をスキップ
-      if (
-        this.lastActiveFilePath === testFilePath &&
-        this.rootNodes.length > 0 &&
-        this.rootNodes[0].type === "file" &&
-        this.rootNodes[0].name === path.basename(testFilePath)
-      ) {
         return;
       }
 
@@ -929,10 +964,70 @@ export class TestTreeDataProvider
       this.rootNodes = [];
       await this.buildTestTree(this.lastActiveFilePath);
 
+      // 現在のノード状態を保存
+      this.saveNodeState();
+
+      // 変更を通知（全体更新）
       this._onDidChangeTreeData.fire();
     } catch (error) {
       console.error("テストツリーの更新に失敗しました:", error);
     }
+  }
+
+  /**
+   * 現在のノード状態を保存
+   */
+  private saveNodeState(): void {
+    // 新しいMapを作成
+    const newState = new Map<string, TestNode>();
+
+    // 各ノードを再帰的に処理するヘルパー関数（再帰ではなく反復処理）
+    const processNodes = (nodes: TestNode[]): void => {
+      // スタックベースの処理でスタックオーバーフローを避ける
+      const stack: TestNode[] = [...nodes];
+
+      while (stack.length > 0) {
+        const node = stack.pop()!;
+
+        // ノードのキーを作成（ファイルパス + 名前 + タイプで一意に識別）
+        const nodeKey = `${node.filePath}#${node.type}#${node.name}`;
+
+        // ノードの状態を保存
+        newState.set(nodeKey, { ...node, children: [] });
+
+        // 子ノードをスタックに追加
+        node.children.forEach((child) => stack.push(child));
+      }
+    };
+
+    // ルートノードから処理を開始
+    processNodes(this.rootNodes);
+
+    // 前回の状態を更新
+    this.previousNodeState = newState;
+  }
+
+  /**
+   * ノードのステータスを更新
+   */
+  private updateNodeStatus(): void {
+    // ノードのステータスのみを更新する処理
+    const updateNodeStatusRecursively = (nodes: TestNode[]): void => {
+      // 各ノードを処理
+      nodes.forEach((node) => {
+        // ノードのキーを作成
+        const nodeKey = `${node.filePath}#${node.type}#${node.name}`;
+
+        // 前回のノード状態から現在のノードのキーを検索
+        const previousNode = this.previousNodeState.get(nodeKey);
+
+        // 子ノードも再帰的に処理
+        updateNodeStatusRecursively(node.children);
+      });
+    };
+
+    // ルートノードから更新処理を開始
+    updateNodeStatusRecursively(this.rootNodes);
   }
 
   /**
@@ -943,6 +1038,11 @@ export class TestTreeDataProvider
       // テストツリーを更新（現在のファイルがこのファイルの場合のみ）
       if (this.lastActiveFilePath === filePath) {
         await this.buildTestTree(filePath);
+
+        // 現在のノード状態を保存
+        this.saveNodeState();
+
+        // 変更があった部分のみを更新
         this._onDidChangeTreeData.fire();
       }
     } catch (error) {
