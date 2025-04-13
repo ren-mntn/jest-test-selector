@@ -202,28 +202,6 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     disposables.push(refreshTestsDisposable);
 
-    // ディレクトリ内のすべてのテストを実行するコマンド
-    const runDirectoryAllTestsDisposable = vscode.commands.registerCommand(
-      "jestTestSelector.runDirectoryAllTests",
-      async (item: TestTreeItem) => {
-        if (!item || !item.filePath) {
-          vscode.window.showErrorMessage("ディレクトリパスが取得できません");
-          return;
-        }
-
-        await runTestsAtScope(
-          "directory" as TestScope,
-          item.filePath,
-          undefined,
-          false,
-          false,
-          false,
-          useTerminalMode
-        );
-      }
-    );
-    disposables.push(runDirectoryAllTestsDisposable);
-
     // ディレクトリ内のユニットテストのみを実行するコマンド
     const runDirectoryUnitTestsDisposable = vscode.commands.registerCommand(
       "jestTestSelector.runDirectoryUnitTests",

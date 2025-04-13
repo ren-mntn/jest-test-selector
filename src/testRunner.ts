@@ -171,8 +171,6 @@ export async function runTestsAtScope(
       throw new Error(`パッケージが見つかりません: ${targetPath}`);
     }
 
-    console.log(`スコープ: ${scope}, パッケージ: ${targetPackage.name}`);
-
     // テスト実行パラメータを作成
     const params = createTestRunParameters(
       scope,

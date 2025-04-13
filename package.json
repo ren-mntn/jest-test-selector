@@ -18,12 +18,10 @@
   "activationEvents": [
     "onCommand:jestTestSelector.runTest",
     "onCommand:jestTestSelector.runDirectoryTests",
-    "onCommand:jestTestSelector.runDirectoryAllTests",
     "onCommand:jestTestSelector.runDirectoryUnitTests",
     "onCommand:jestTestSelector.runDirectoryE2ETests",
     "onCommand:jestTestSelector.runFileAllTests",
     "onCommand:jestTestSelector.runSelectedTest",
-    "onCommand:jestTestSelector.runPackageAllTests",
     "onCommand:jestTestSelector.toggleTerminalMode",
     "onCommand:jestTestSelector.showTerminalMode",
     "onView:jestTestSelector.testExplorer",
@@ -43,11 +41,6 @@
         "icon": "$(plug)"
       },
       {
-        "command": "jestTestSelector.runPackageAllTests",
-        "title": "パッケージの全てのテストを実行",
-        "icon": "$(run-all)"
-      },
-      {
         "command": "jestTestSelector.runDirectoryUnitTests",
         "title": "ディレクトリのユニットテストを実行",
         "icon": "$(symbol-unit)"
@@ -56,11 +49,6 @@
         "command": "jestTestSelector.runDirectoryE2ETests",
         "title": "ディレクトリのE2Eテストを実行",
         "icon": "$(plug)"
-      },
-      {
-        "command": "jestTestSelector.runDirectoryAllTests",
-        "title": "ディレクトリの全てのテストを実行",
-        "icon": "$(run-all)"
       },
       {
         "command": "jestTestSelector.runSelectedTest",
@@ -167,18 +155,8 @@
           "group": "inline"
         },
         {
-          "command": "jestTestSelector.runPackageAllTests",
-          "when": "view == jestTestSelector.testExplorer && (viewItem == packageAllTests || viewItem == packageAllTests-highlighted)",
-          "group": "inline"
-        },
-        {
           "command": "jestTestSelector.runFileAllTests",
           "when": "view == jestTestSelector.testExplorer && (viewItem == runnableTestFile || viewItem == runnableTestFile-highlighted || viewItem =~ /runnableTestFile/)",
-          "group": "inline"
-        },
-        {
-          "command": "jestTestSelector.runDirectoryAllTests",
-          "when": "view == jestTestSelector.testExplorer && (viewItem == directoryAllTests || viewItem == directoryAllTests-highlighted || viewItem == testFile || viewItem == testFile-highlighted)",
           "group": "inline"
         },
         {
