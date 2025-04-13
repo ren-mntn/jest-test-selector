@@ -3,8 +3,6 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { TestCase } from "./testExtractor";
 import * as testResultProcessor from "./testResultProcessor2";
-import { notifyTestSessionEnd } from "./testResultProcessor2";
-
 /**
  * デバッガーの状態を表す型
  */
@@ -78,17 +76,17 @@ const endDebugSession = async () => {
         console.warn(
           `[debugger] 結果ファイルが存在しません: ${jsonOutputFilePath}`
         );
-        notifyTestSessionEnd(); // 結果ファイルがなくてもテスト終了を通知
+        testResultProcessor.notifyTestSessionEnd(); // 結果ファイルがなくてもテスト終了を通知
       }
     } catch (error) {
       console.error(`[debugger] テスト結果処理中にエラー: ${error}`);
-      notifyTestSessionEnd(); // エラーが発生してもテスト終了を通知
+      testResultProcessor.notifyTestSessionEnd(); // エラーが発生してもテスト終了を通知
     } finally {
       updateDebuggerState({ jsonOutputFilePath: null });
     }
   } else {
     console.log("[debugger] jsonOutputFilePathが指定されていません");
-    notifyTestSessionEnd(); // 結果ファイルがなくてもテスト終了を通知
+    testResultProcessor.notifyTestSessionEnd(); // 結果ファイルがなくてもテスト終了を通知
   }
 };
 
@@ -257,7 +255,24 @@ export const createTestCommand = async (
       command.push(escapeRegExp(testCase.fullName));
     }
 
-    // TODO：オプションのコマンドを追加
+    // Jestの設定オプションを追加
+    const config = vscode.workspace.getConfiguration("jestTestSelector");
+    const cliOptions = config.get<Record<string, boolean>>("cliOptions") || {};
+
+    // 有効なオプションをコマンドに追加
+    Object.entries(cliOptions).forEach(([option, enabled]) => {
+      if (enabled) {
+        command.push(option);
+      }
+    });
+
+    // CLIオプションが追加されたログを出力
+    console.log(
+      `[debugger] Jest CLI オプション適用: ${Object.entries(cliOptions)
+        .filter(([_, enabled]) => enabled)
+        .map(([option]) => option)
+        .join(", ")}`
+    );
 
     return command;
   } catch (error) {
@@ -297,7 +312,6 @@ export const startDebugging = async (
 
     // テスト結果出力用のファイルパスを取得
     const jsonOutputFilePath = testResultProcessor.generateJsonOutputFilePath();
-    console.log(`[debugger] JSON出力ファイルパス: ${jsonOutputFilePath}`);
 
     // デバッガーの状態にもパスを保存
     updateDebuggerState({ jsonOutputFilePath });
@@ -335,9 +349,3 @@ export const startDebugging = async (
     return false;
   }
 };
-
-// 後方互換性のために JestDebugger クラスを維持
-export class JestDebugger {
-  public static originalStartDebugging = startDebugging;
-  public static createTestCommand = createTestCommand;
-}

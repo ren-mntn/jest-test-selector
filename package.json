@@ -24,6 +24,7 @@
     "onCommand:jestTestSelector.runSelectedTest",
     "onCommand:jestTestSelector.toggleTerminalMode",
     "onCommand:jestTestSelector.showTerminalMode",
+    "onCommand:jestTestSelector.showJestSettings",
     "onView:jestTestSelector.testExplorer",
     "onView:jestTestSelector.testSettings"
   ],
@@ -75,9 +76,9 @@
         "icon": "$(gear)"
       },
       {
-        "command": "jestTestSelector.toggleCoverage",
-        "title": "カバレッジ出力を切り替え",
-        "icon": "$(shield)"
+        "command": "jestTestSelector.showJestSettings",
+        "title": "Jest: 設定パネルを表示",
+        "icon": "$(gear)"
       },
       {
         "command": "jestTestSelector.goToOnlyLocation",
@@ -130,12 +131,6 @@
           "command": "jestTestSelector.openSettings",
           "when": "view == jestTestSelector.testExplorer",
           "group": "navigation"
-        },
-        {
-          "command": "jestTestSelector.toggleCoverage",
-          "when": "view == jestTestSelector.testExplorer",
-          "group": "navigation",
-          "icon": "$(shield)"
         }
       ],
       "view/item/context": [

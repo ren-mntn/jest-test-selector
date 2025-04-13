@@ -30,23 +30,6 @@ export async function activate(context: vscode.ExtensionContext) {
       console.error("TestResultProcessor2 の初期化に失敗:", error);
     });
 
-  // カバレッジステータス表示用のステータスバーアイテム
-  const coverageStatusBarItem = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right,
-    100
-  );
-  coverageStatusBarItem.text = "$(shield-lock) カバレッジ有効";
-  coverageStatusBarItem.tooltip =
-    "Jestのカバレッジ出力が有効になっています。クリックで無効化";
-  coverageStatusBarItem.command = "jestTestSelector.toggleCoverage";
-  coverageStatusBarItem.backgroundColor = new vscode.ThemeColor(
-    "statusBarItem.warningBackground"
-  );
-  coverageStatusBarItem.color = new vscode.ThemeColor(
-    "statusBarItem.warningForeground"
-  );
-  context.subscriptions.push(coverageStatusBarItem);
-
   // ターミナル実行モード用のステータスバーアイテム
   const terminalModeStatusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -98,22 +81,16 @@ export async function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(showTerminalModeDisposable);
 
-  // カバレッジ設定の初期状態をチェックしてステータスバーを更新
-  (async () => {
-    const config = vscode.workspace.getConfiguration("jestTestSelector");
-    const currentOptions = config.get<Record<string, any>>("cliOptions") || {};
-    const isCoverageEnabled = !!currentOptions["--coverage"];
-
-    // ステータスバーアイテムの表示/非表示を設定
-    if (isCoverageEnabled) {
-      coverageStatusBarItem.show();
-    } else {
-      coverageStatusBarItem.hide();
-    }
-
-    // ターミナルモードのステータスバーも表示
-    terminalModeStatusBarItem.show();
-  })();
+  // ステータスバーにJest設定ボタンを追加
+  const jestSettingsStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    99 // coverageStatusBarItemより1小さい値にして左側に表示
+  );
+  jestSettingsStatusBarItem.text = "$(gear) Jest設定";
+  jestSettingsStatusBarItem.tooltip = "Jestの設定オプションを開く";
+  jestSettingsStatusBarItem.command = "jestTestSelector.showJestSettings";
+  context.subscriptions.push(jestSettingsStatusBarItem);
+  jestSettingsStatusBarItem.show();
 
   // 拡張機能が既に有効化されているかチェック
   try {
@@ -186,6 +163,16 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     );
     disposables.push(openSettingsDisposable);
+
+    // Jest設定パネルを表示するコマンドを登録
+    const showJestSettingsDisposable = vscode.commands.registerCommand(
+      "jestTestSelector.showJestSettings",
+      () => {
+        // WebviewPanelとして表示
+        testSettingsProvider.showWebviewPanel();
+      }
+    );
+    disposables.push(showJestSettingsDisposable);
 
     // テスト設定プロバイダーを追加
     if (testSettingsProviderDisposable) {

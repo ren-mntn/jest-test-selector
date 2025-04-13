@@ -394,6 +394,7 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private static _instance: TestSettingsProvider;
   private _fileWatcher?: vscode.FileSystemWatcher;
+  private _panel?: vscode.WebviewPanel;
 
   // シングルトンインスタンスを取得
   public static getInstance(extensionUri: vscode.Uri): TestSettingsProvider {
@@ -417,6 +418,68 @@ export class TestSettingsProvider implements vscode.WebviewViewProvider {
       );
       this._view.webview.html = html;
     }
+
+    if (this._panel) {
+      const html = generateWebviewContent(
+        this._extensionUri,
+        this._panel.webview,
+        this._panel.webview.cspSource
+      );
+      this._panel.webview.html = html;
+    }
+  }
+
+  /**
+   * WebViewPanelを表示する
+   */
+  public showWebviewPanel(): void {
+    // 既に表示されている場合は前面に表示
+    if (this._panel) {
+      this._panel.reveal(vscode.ViewColumn.One);
+      return;
+    }
+
+    // パネルを作成
+    this._panel = vscode.window.createWebviewPanel(
+      "jestTestSelectorSettings",
+      "Jest設定オプション",
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [this._extensionUri],
+      }
+    );
+
+    // HTMLコンテンツを設定
+    this._panel.webview.html = generateWebviewContent(
+      this._extensionUri,
+      this._panel.webview,
+      this._panel.webview.cspSource
+    );
+
+    // メッセージ受信ハンドラを設定
+    this._panel.webview.onDidReceiveMessage(async (message) => {
+      if (message.command === "saveOptions") {
+        const result = await saveOptions(message.options);
+
+        // 結果をWebViewに送信
+        this._panel?.webview.postMessage({
+          command: "saveComplete",
+          ...result,
+        });
+
+        // エラーの場合のみVS Code通知を表示
+        if (!result.success && result.message) {
+          vscode.window.showErrorMessage(result.message);
+        }
+      }
+    });
+
+    // パネルが閉じられたときのクリーンアップ
+    this._panel.onDidDispose(() => {
+      this._panel = undefined;
+    });
   }
 
   /**

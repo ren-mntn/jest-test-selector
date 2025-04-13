@@ -1,8 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { JestDebugger } from "./debugger";
 import { detectMonorepoPackages, PackageInfo } from "./monorepoDetector";
 import { TestCase } from "./testExtractor";
+import { startDebugging } from "./debugger";
 
 // テスト実行のスコープを定義する型
 export type TestScope = "global" | "directory" | "file" | "package";
@@ -70,7 +70,7 @@ export const runTest = async (params: TestRunParameters): Promise<boolean> => {
         : e2eTestOnly; // パッケージの場合
 
     // テスト実行
-    const success = await JestDebugger.originalStartDebugging(
+    const success = await startDebugging(
       targetPackage.path,
       debugTargetPath,
       isE2ETest,

@@ -296,3 +296,20 @@ const memoizedCheckFileTestStatus = memoize(
 - 宣言的コードによる可読性と拡張性の向上
 
 データ構造と検索アルゴリズムを最適化することで、特に大規模プロジェクトやテスト数が多い場合のパフォーマンスが大幅に向上します。
+
+## 追加機能実装メモ
+
+### Jest の設定パネルをトップバーのドロップダウンで表示できるように変更 (2024-xx-xx)
+
+- TestSettingsProvider クラスに WebviewPanel を表示するための showWebviewPanel()メソッドを追加
+- トップバーに Jest 設定ボタンを配置するための StatusBarItem を追加
+  - 表示位置: ステータスバー右側（カバレッジボタンの左）
+  - アイコン: $(gear)
+  - テキスト: "Jest 設定"
+- 新規コマンド「jestTestSelector.showJestSettings」を実装
+  - ステータスバーのボタンクリック時に、WebviewPanel で設定画面を表示
+  - package.json に新コマンドの設定を追加
+  - activationEvents にもイベント登録
+- WebviewPanel は、既に表示されている場合は前面に表示し、初回または閉じられた後は新規作成
+
+この変更により、今まではサイドパネルでのみ表示できた設定オプション画面をトップバーのドロップダウンアイコンからも直接開けるようになり、ユーザーの操作性が向上しました。WebviewPanel は画面の広いスペースを使用できるため、多数の設定オプションを見やすく表示できます。
