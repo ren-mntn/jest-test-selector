@@ -122,3 +122,177 @@
    - 単一責任の原則に基づいた関数設計で、コードの保守性と拡張性を向上
 
 これらの改善により、頻繁なテスト結果の更新や大規模なテストスイートを持つプロジェクトでの UI 応答性が大幅に向上します。特に、テスト実行中の逐次的な結果表示や、多数のネストされたテストグループを持つファイルの編集時に効果を発揮します。
+
+### 3. ファイル I/O とパース処理の最適化
+
+以下の改善を関数型・宣言的プログラミングスタイルで実装しました：
+
+1. **テストケース抽出の効率化**
+
+   - 時間ベースのキャッシュ戦略を導入し、`getTestCasesWithCache` メソッドによるテストケースの効率的な取得を実現
+   - 同一ファイルに対する重複抽出を防止し、ファイル変更時のみ再解析を行うように最適化
+   - ファイルごとにテストケースを`Map`構造でキャッシュし、高速なルックアップを実現
+
+2. **テストファイル検索の高速化**
+
+   - 従来の`fs.readDirectory`によるディレクトリ全走査から`vscode.workspace.findFiles`を使用した効率的な検索に変更
+   - ファイルパターンに基づく並列検索で、大規模プロジェクトでの検索パフォーマンスを大幅に向上
+   - 検索結果のキャッシュ導入による重複クエリの削減
+
+3. **Jest 設定ファイル検索の最適化**
+
+   - 再帰的なディレクトリ走査を廃止し、`vscode.workspace.findFiles`を活用した高速な設定ファイル検索を実装
+   - `node_modules`などの不要なディレクトリを除外した効率的なファイル検索
+   - 関数型プログラミング手法を用いた「最も近い設定ファイル」検索アルゴリズムの実装
+
+4. **並列処理による効率化**
+
+   - 複数のテストファイルの処理を`Promise.all`を使って並列化
+   - 純粋関数と高階関数を組み合わせた宣言的な非同期処理
+   - マルチコア活用による処理時間の短縮
+
+5. **有効期限付きキャッシュ戦略**
+
+   - 各キャッシュにタイムスタンプとデータを組み合わせた構造を導入
+   - 一定時間（デフォルト 1 分）後にキャッシュを自動的に無効化することで、常に最新のデータとのバランスを確保
+   - メモリ使用量とパフォーマンスのトレードオフを最適化
+
+これらの改善により、特に以下のシナリオでパフォーマンスが向上します：
+
+- 大規模なモノレポ構造を持つプロジェクト
+- 多数のテストファイルを含むディレクトリの処理
+- 深いディレクトリ階層を持つプロジェクトの Jest 設定ファイル検索
+
+これらの最適化は関数型アプローチを取り入れることで副作用を限定し、メンテナンス性とテスト容易性も向上させています。
+
+### 4. データ構造と検索の最適化提案
+
+以下の改善を関数型・宣言的プログラミングスタイルで実装することを提案します：
+
+1. **テスト結果インデックスの効率化**
+
+   - `trie`データ構造を活用したファイルパスとテスト名のインデックス構築
+   - 前方一致・部分一致の高速検索が可能なインデックス設計
+   - ハッシュマップベースの高速検索と、階層構造を活かした効率的なルックアップの両立
+
+2. **イミュータブルなデータ構造による状態管理**
+
+   - 不変（immutable）データ構造を用いた状態管理の徹底
+   - `Readonly<T>`型や`Object.freeze()`を活用した意図しない変更の防止
+   - 参照の共有によるメモリ効率の向上と、変更検知の明確化
+
+3. **関数型コレクション操作の活用**
+
+   - 命令型ループから`filter`、`map`、`reduce`などの関数型高階関数への移行
+   - パイプライン処理による複雑なデータ変換の簡潔な表現
+   - チェーン可能なデータ処理による可読性と保守性の向上
+
+4. **ノード検索アルゴリズムの改善**
+
+   - 再帰的な深さ優先検索から、インデックスベースの直接アクセスへの変更
+   - ノード ID（ファイルパス・タイプ・名前の組み合わせ）による O(1)検索の実現
+   - メモ化（memoization）による繰り返し検索の効率化
+
+5. **ラムダ計算に基づく純粋関数設計**
+
+   - 副作用のない純粋関数による処理の明確化
+   - 関数合成（composition）による複雑な処理の構築
+   - 引数カリー化（currying）による部分適用と再利用性の向上
+
+6. **データの正規化とセレクタパターン**
+
+   - 正規化されたデータモデルで重複を排除
+   - セレクタ関数による効率的なデータアクセス
+   - メモ化されたセレクタによる計算コストの削減
+
+実装例として、以下のようなコード改善が考えられます：
+
+```typescript
+// テスト結果アクセス効率化のためのインデックス構造
+interface TestResultIndex {
+  readonly byFilePath: ReadonlyMap<string, Set<string>>;
+  readonly byTestName: ReadonlyMap<string, Set<string>>;
+  readonly byFullKey: ReadonlyMap<string, TestResultStatus>;
+}
+
+// イミュータブルなインデックス更新関数
+const updateTestResultIndex = (
+  index: TestResultIndex,
+  filePath: string,
+  testName: string,
+  status: TestResultStatus
+): TestResultIndex => {
+  // 新しいインデックスを作成（既存のを変更しない）
+  const newByFilePath = new Map(index.byFilePath);
+  const newByTestName = new Map(index.byTestName);
+  const newByFullKey = new Map(index.byFullKey);
+
+  // ファイルパスインデックス更新
+  const fileTests = newByFilePath.get(filePath) || new Set<string>();
+  fileTests.add(testName);
+  newByFilePath.set(filePath, fileTests);
+
+  // テスト名インデックス更新
+  const testPaths = newByTestName.get(testName) || new Set<string>();
+  testPaths.add(filePath);
+  newByTestName.set(testName, testPaths);
+
+  // 完全キーインデックス更新
+  const fullKey = `${filePath}#${testName}`;
+  newByFullKey.set(fullKey, status);
+
+  // 新しいイミュータブルなインデックスを返す
+  return {
+    byFilePath: newByFilePath,
+    byTestName: newByTestName,
+    byFullKey: newByFullKey,
+  };
+};
+
+// メモ化されたファイルステータスチェック
+const memoizedCheckFileTestStatus = memoize(
+  (
+    filePath: string,
+    index: TestResultIndex
+  ): "success" | "failure" | "unknown" => {
+    if (!filePath || !isTestFile(filePath)) {
+      return "unknown";
+    }
+
+    // ファイルに関連するテスト取得（正規化パスとファイル名の両方を考慮）
+    const normalizedPath = path.normalize(filePath);
+    const baseNameOnly = path.basename(filePath);
+
+    const fileTests =
+      index.byFilePath.get(normalizedPath) ||
+      index.byFilePath.get(baseNameOnly) ||
+      new Set<string>();
+
+    // 関連テストがない場合
+    if (fileTests.size === 0) {
+      return "unknown";
+    }
+
+    // テストのステータスをチェック（関数型アプローチ）
+    const hasFailedTests = Array.from(fileTests).some((testName) => {
+      const fullKey = `${normalizedPath}#${testName}`;
+      const status = index.byFullKey.get(fullKey);
+      return status === TestResultStatus.Failure;
+    });
+
+    return hasFailedTests ? "failure" : "success";
+  },
+  // キャッシュキー生成関数（第2引数）
+  (filePath: string) => filePath
+);
+```
+
+このような最適化により、以下の効果が期待できます：
+
+- テスト結果検索の計算量が O(n)から O(1)に改善
+- メモリ使用量の効率化と GC プレッシャーの軽減
+- イミュータブルデータによる予測可能な状態管理
+- 副作用の局所化による堅牢性と保守性の向上
+- 宣言的コードによる可読性と拡張性の向上
+
+データ構造と検索アルゴリズムを最適化することで、特に大規模プロジェクトやテスト数が多い場合のパフォーマンスが大幅に向上します。

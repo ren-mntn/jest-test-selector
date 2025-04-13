@@ -237,7 +237,7 @@ export const createTestCommand = async (
     command.push("--outputFile", jsonOutputFilePath);
 
     // テスト対象のパスを追加
-    if (testCase != null) {
+    if (testCase == null) {
       command.push("--testPathPattern");
       if (isExcludeSubdirectories) {
         // サブディレクトリを除外する場合
