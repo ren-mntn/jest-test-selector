@@ -238,7 +238,7 @@ const updateTestResultsForFile = (
   const oldKeys = new Set(Object.keys(oldTests));
   const newKeys = new Set(Object.keys(newTests));
 
-  // 削除されたテスト
+  // インデックスから削除されたテストを削除
   for (const testName of oldKeys) {
     if (!newKeys.has(testName)) {
       const key = `${normalizedPath}#${testName}`;
@@ -259,15 +259,25 @@ const updateTestResultsForFile = (
     );
   }
 
-  // テスト結果を更新
+  // テスト結果を更新（既存の結果に新しいテスト結果をマージ）
   if (Object.keys(newTests).length === 0) {
     // テストが空なら削除
     if (normalizedPath in currentState.testResults) {
       delete currentState.testResults[normalizedPath];
     }
   } else {
-    // テスト結果を更新
-    currentState.testResults[normalizedPath] = { ...newTests };
+    // 既存のテスト結果を保持しつつ、新しいテスト結果だけを更新
+    if (!currentState.testResults[normalizedPath]) {
+      currentState.testResults[normalizedPath] = {};
+    }
+
+    // 新しいテスト結果だけを更新（既存のテストはそのまま保持）
+    for (const [testName, result] of Object.entries(newTests)) {
+      // PENDINGステータスの場合は既存の結果があれば上書きしない
+      if (result.status !== TestResultStatus.Pending || !oldTests[testName]) {
+        currentState.testResults[normalizedPath][testName] = result;
+      }
+    }
   }
 };
 
